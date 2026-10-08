@@ -27,14 +27,18 @@ from rich import print as rprint
 
 
 def banner():
-    rprint(Panel.fit(
-        "[bold cyan]AI Trading Bot[/bold cyan]\n"
-        f"[dim]Powered by Claude claude-opus-4-5 | Broker: {config.BROKER}[/dim]\n"
-        f"[{'bold yellow' if config.PAPER_TRADING else 'bold red'}]"
-        f"{'PAPER TRADING MODE' if config.PAPER_TRADING else '⚠ LIVE TRADING — REAL MONEY'}[/]",
-        title="[bold]REFURBDROP Trading Bot[/bold]",
-        border_style="cyan",
-    ))
+    try:
+        rprint(Panel.fit(
+            "[bold cyan]AI Trading Bot[/bold cyan]\n"
+            f"[dim]Powered by Claude claude-opus-5-5 | Broker: {config.BROKER}[/dim]\n"
+            f"[{'bold yellow' if config.PAPER_TRADING else 'bold red'}]"
+            f"{'PAPER TRADING MODE' if config.PAPER_TRADING else 'LIVE TRADING - REAL MONEY'}[/]",
+            title="[bold]REFURBDROP Trading Bot[/bold]",
+            border_style="cyan",
+        ))
+    except Exception:
+        mode = "PAPER" if config.PAPER_TRADING else "LIVE"
+        print(f"=== REFURBDROP Trading Bot | {config.BROKER} | {mode} ===")
 
 
 def run_bot(paper_override: bool = False, once: bool = False, force_run: bool = False):

@@ -8,7 +8,7 @@ from datetime import datetime
 BASE   = Path(__file__).parent
 LOGS   = BASE / "logs"
 UP_LOG = LOGS / "crypto_upgraded_out.log"
-WA_LOG = Path(r"C:\Users\Liberty\AppData\Local\Temp\claude\C--Users-Liberty-Documents-REFURBDROP\69cc84a6-5b92-4328-b632-1ec99c564a4e\tasks\bbbtnuzhh.output")
+WA_LOG = LOGS / "watch_out.log"
 
 
 def _read(path: Path, tail: int = 400) -> str:

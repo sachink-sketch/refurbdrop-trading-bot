@@ -24,7 +24,7 @@ from utils.logger import logger
 def banner(exchange_name: str):
     rprint(Panel.fit(
         f"[bold cyan]Crypto Micro-Trading Bot[/bold cyan]\n"
-        f"[dim]Claude claude-opus-4-5 | Exchange: {exchange_name}[/dim]\n"
+        f"[dim]Claude claude-opus-5-5 | Exchange: {exchange_name}[/dim]\n"
         f"[bold yellow]PAPER MODE — ${ crypto_config.PAPER_STARTING_USDT:,.0f} virtual USDT[/bold yellow]"
         if exchange_name == "PAPER" else
         f"[bold red]LIVE TRADING — {exchange_name}[/bold red]",
@@ -40,6 +40,9 @@ def run(demo: bool = False, live: bool = False, cycles: int = 0):
             logger.error(e)
         sys.exit(1)
 
+    # Auto-detect live mode: if CRYPTO_EXCHANGE is set to anything other than PAPER, go live
+    if not live and crypto_config.EXCHANGE not in ("PAPER", ""):
+        live = True
     if live:
         crypto_config.EXCHANGE = os.getenv("CRYPTO_EXCHANGE", "ROBINHOOD")
 
@@ -68,8 +71,16 @@ def run(demo: bool = False, live: bool = False, cycles: int = 0):
         return
 
     # Continuous mode
-    bot.run_cycle()
-    schedule.every(crypto_config.SCAN_INTERVAL_SECONDS).seconds.do(bot.run_cycle)
+    def safe_cycle():
+        try:
+            bot.run_cycle()
+        except KeyboardInterrupt:
+            raise
+        except Exception as e:
+            logger.error(f"[BOT] Cycle error (will retry next cycle in {crypto_config.SCAN_INTERVAL_SECONDS}s): {e}")
+
+    safe_cycle()
+    schedule.every(crypto_config.SCAN_INTERVAL_SECONDS).seconds.do(safe_cycle)
     logger.info(f"Running continuously every {crypto_config.SCAN_INTERVAL_SECONDS}s. Ctrl+C to stop.")
     while True:
         try:
@@ -78,6 +89,9 @@ def run(demo: bool = False, live: bool = False, cycles: int = 0):
         except KeyboardInterrupt:
             logger.info("Crypto bot stopped.")
             break
+        except Exception as e:
+            logger.error(f"[BOT] Main loop error (continuing): {e}")
+            time.sleep(10)
 
 
 if __name__ == "__main__":
