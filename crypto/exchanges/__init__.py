@@ -6,6 +6,9 @@ def get_exchange(force_paper: bool = False) -> BaseCryptoExchange:
     if crypto_config.EXCHANGE == "PAPER" or force_paper:
         from crypto.exchanges.paper_exchange import PaperCryptoExchange
         return PaperCryptoExchange(crypto_config.PAPER_STARTING_USDT)
+    if crypto_config.EXCHANGE == "ROBINHOOD":
+        from crypto.exchanges.robinhood_exchange import RobinhoodCryptoExchange
+        return RobinhoodCryptoExchange()
     from crypto.exchanges.live_exchange import LiveCryptoExchange
     return LiveCryptoExchange(
         crypto_config.EXCHANGE,

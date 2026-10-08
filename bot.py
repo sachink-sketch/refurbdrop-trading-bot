@@ -8,6 +8,7 @@ from risk.manager import RiskManager
 from utils.market_data import market_data
 from utils.logger import logger
 from config import config
+import firebase_writer as fb
 
 
 class TradingBot:
@@ -85,6 +86,7 @@ class TradingBot:
         try:
             result = self.broker.buy_market(symbol, qty)
             self.risk.record_trade(symbol, "BUY", qty, result.price)
+            fb.push_async(fb.push_trade_event, "BUY", symbol, result.price)
         except Exception as e:
             logger.error(f"Buy order failed for {symbol}: {e}")
 
@@ -98,6 +100,7 @@ class TradingBot:
                 entry = pos.avg_cost
                 pnl_pct = (result.price - entry) / entry if entry else 0
                 self.analyst.record_trade_outcome(symbol, "SELL", entry, result.price, pnl_pct)
+                fb.push_async(fb.push_trade_event, "SELL", symbol, result.price, pnl_pct)
         except Exception as e:
             logger.error(f"Sell order failed for {symbol}: {e}")
 
@@ -110,6 +113,7 @@ class TradingBot:
             if pos:
                 pnl_pct = (result.price - pos.avg_cost) / pos.avg_cost if pos.avg_cost else 0
                 self.analyst.record_trade_outcome(symbol, "SELL", pos.avg_cost, result.price, pnl_pct)
+                fb.push_async(fb.push_trade_event, "STOP LOSS", symbol, result.price, pnl_pct)
             logger.info(f"Exit {symbol} ({reason}) complete")
         except Exception as e:
             logger.error(f"Exit order failed for {symbol}: {e}")
@@ -130,5 +134,8 @@ class TradingBot:
                     f"-> ${pos.current_price:.2f} ({pos.unrealized_pnl_pct:+.2%}) "
                     f"= ${pos.unrealized_pnl:+.2f}"
                 )
+            # Push stock bot state to Firebase dashboard
+            fb.push_async(fb.push_status, total, 0.0, 0.0, self._cycle_count)
+            fb.push_async(fb.push_positions, positions)
         except Exception as e:
             logger.error(f"Error printing summary: {e}")

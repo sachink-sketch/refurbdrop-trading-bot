@@ -41,7 +41,7 @@ def run(demo: bool = False, live: bool = False, cycles: int = 0):
         sys.exit(1)
 
     if live:
-        crypto_config.EXCHANGE = os.getenv("CRYPTO_EXCHANGE", "BINANCE")
+        crypto_config.EXCHANGE = os.getenv("CRYPTO_EXCHANGE", "ROBINHOOD")
 
     from crypto.exchanges import get_exchange
     exchange = get_exchange(force_paper=not live)

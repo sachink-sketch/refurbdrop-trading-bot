@@ -82,6 +82,9 @@ class CryptoBot:
         self._print_summary()
 
     def _analyze_and_trade(self, pair: str, usdt: float, positions: dict):
+        # Skip pairs unsupported by the current exchange (e.g. BNB on Robinhood)
+        if hasattr(self.exchange, "supports_pair") and not self.exchange.supports_pair(pair):
+            return
         df = self.exchange.get_ohlcv(
             pair, timeframe=crypto_config.CANDLE_TIMEFRAME, limit=crypto_config.CANDLE_LIMIT
         )

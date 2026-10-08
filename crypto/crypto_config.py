@@ -7,7 +7,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "../.env"))
 class CryptoConfig:
     ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
 
-    # Exchange: PAPER | BINANCE | COINBASE | KRAKEN
+    # Exchange: PAPER | ROBINHOOD | BINANCE | COINBASE | KRAKEN
     EXCHANGE: str = os.getenv("CRYPTO_EXCHANGE", "PAPER").upper()
 
     # Exchange API keys (only needed for live trading)
@@ -52,7 +52,7 @@ class CryptoConfig:
         errors = []
         if not self.ANTHROPIC_API_KEY:
             errors.append("ANTHROPIC_API_KEY is required")
-        if self.EXCHANGE != "PAPER":
+        if self.EXCHANGE not in ("PAPER", "ROBINHOOD"):
             if not self.EXCHANGE_API_KEY or not self.EXCHANGE_API_SECRET:
                 errors.append(f"CRYPTO_API_KEY and CRYPTO_API_SECRET required for {self.EXCHANGE}")
         return errors
