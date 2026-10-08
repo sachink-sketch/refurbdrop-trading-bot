@@ -72,19 +72,16 @@ class ClaudeAnalyst:
 
         response = self.client.messages.create(
             model=self.model,
-            max_tokens=1024,
+            max_tokens=4096,
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_message}],
         )
 
-        raw = response.content[0].text.strip()
-        # Strip markdown code fences if present
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-            raw = raw.strip()
-
+        raw = next(b.text for b in response.content if hasattr(b, "text")).strip()
+        # Extract JSON object robustly — handles thinking preamble and markdown fences
+        start, end = raw.find("{"), raw.rfind("}")
+        if start != -1 and end != -1:
+            raw = raw[start:end + 1]
         data = json.loads(raw)
 
         signal = TradeSignal(

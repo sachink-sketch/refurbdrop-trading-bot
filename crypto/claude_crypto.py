@@ -73,17 +73,15 @@ class ClaudeCryptoAnalyst:
         prompt = self._build_prompt(pair, indicators, portfolio_usdt, open_positions)
         response = self.client.messages.create(
             model=self.model,
-            max_tokens=512,
+            max_tokens=4096,
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": prompt}],
         )
-        raw = response.content[0].text.strip()
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-            raw = raw.strip()
-
+        raw = next(b.text for b in response.content if hasattr(b, "text")).strip()
+        # Extract JSON object robustly — handles thinking preamble and markdown fences
+        start, end = raw.find("{"), raw.rfind("}")
+        if start != -1 and end != -1:
+            raw = raw[start:end + 1]
         data = json.loads(raw)
         usdt_to_use = portfolio_usdt * float(data.get("usdt_amount_pct", 0.5))
 
