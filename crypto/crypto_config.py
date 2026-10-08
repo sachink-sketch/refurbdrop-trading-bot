@@ -28,25 +28,33 @@ class CryptoConfig:
         if p.strip()
     ]
 
+    # Pairs permanently excluded from trading (zero-volume on Binance.US due to USD-not-USDT
+    # native liquidity; Claude correctly flags them as unreliable every cycle).
+    EXCLUDED_PAIRS: set[str] = {
+        p.strip().upper()
+        for p in os.getenv("CRYPTO_EXCLUDED_PAIRS", "DOGE/USDT,AVAX/USDT").split(",")
+        if p.strip()
+    }
+
     # Micro-trading settings
-    SCAN_INTERVAL_SECONDS: int = int(os.getenv("CRYPTO_SCAN_SECONDS", "120"))   # 2 min
-    CANDLE_TIMEFRAME: str = os.getenv("CRYPTO_TIMEFRAME", "1m")                # 1-minute candles
-    CANDLE_LIMIT: int = int(os.getenv("CRYPTO_CANDLE_LIMIT", "250"))           # last 250 candles (needs 200+ for SMA200)
+    SCAN_INTERVAL_SECONDS: int = int(os.getenv("CRYPTO_SCAN_SECONDS", "120"))   # 2 min — matches 5m candle cadence
+    CANDLE_TIMEFRAME: str = os.getenv("CRYPTO_TIMEFRAME", "5minute")           # 5-min candles — cleaner signals
+    CANDLE_LIMIT: int = int(os.getenv("CRYPTO_CANDLE_LIMIT", "200"))           # last 200 candles (~16 hrs)
 
-    # Risk — tighter for micro trading
-    MAX_POSITION_PCT: float  = float(os.getenv("CRYPTO_MAX_POSITION_PCT", "0.08"))   # 8% per trade
-    MAX_OPEN_TRADES: int     = int(os.getenv("CRYPTO_MAX_OPEN_TRADES", "5"))         # up from 3
-    STOP_LOSS_PCT: float     = float(os.getenv("CRYPTO_STOP_LOSS_PCT", "0.008"))     # 0.8%
-    TAKE_PROFIT_PCT: float   = float(os.getenv("CRYPTO_TAKE_PROFIT_PCT", "0.016"))   # 1.6%  (2:1 R/R)
-    MAX_DAILY_LOSS_PCT: float = float(os.getenv("CRYPTO_MAX_DAILY_LOSS_PCT", "0.03"))# 3%
-    MIN_CONFIDENCE: float    = float(os.getenv("CRYPTO_MIN_CONFIDENCE", "0.60"))     # lowered for more signals
+    # Risk — tuned for maximum daily P&L on ~$300 account
+    MAX_POSITION_PCT: float  = float(os.getenv("CRYPTO_MAX_POSITION_PCT", "0.20"))   # 20% per trade = ~$60/slot
+    MAX_OPEN_TRADES: int     = int(os.getenv("CRYPTO_MAX_OPEN_TRADES", "8"))
+    STOP_LOSS_PCT: float     = float(os.getenv("CRYPTO_STOP_LOSS_PCT", "0.008"))     # 0.8% SL — tight
+    TAKE_PROFIT_PCT: float   = float(os.getenv("CRYPTO_TAKE_PROFIT_PCT", "0.020"))   # 2.0% TP (2.5:1 R/R)
+    MAX_DAILY_LOSS_PCT: float = float(os.getenv("CRYPTO_MAX_DAILY_LOSS_PCT", "0.04"))# 4% daily loss cap
+    MIN_CONFIDENCE: float    = float(os.getenv("CRYPTO_MIN_CONFIDENCE", "0.55"))     # 55% — catches trending momentum setups
 
-    # Trailing stop — activates once position is +0.8% in profit
+    # Trailing stop — activates at +0.8%, trails tightly to stay in winners longer
     TRAIL_ACTIVATE_PCT: float = float(os.getenv("CRYPTO_TRAIL_ACTIVATE_PCT", "0.008"))
-    TRAIL_PCT: float          = float(os.getenv("CRYPTO_TRAIL_PCT", "0.005"))        # trail 0.5% below peak
+    TRAIL_PCT: float          = float(os.getenv("CRYPTO_TRAIL_PCT", "0.0035"))       # 0.35% trail — tighter
 
-    # Time-based exit — close position if still open after this many minutes
-    TIME_EXIT_MINUTES: int    = int(os.getenv("CRYPTO_TIME_EXIT_MINUTES", "30"))
+    # Time-based exit — 15 min cuts chop losses fast, frees capital for next trade
+    TIME_EXIT_MINUTES: int    = int(os.getenv("CRYPTO_TIME_EXIT_MINUTES", "15"))
 
     def validate(self) -> list[str]:
         errors = []

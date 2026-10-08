@@ -1,5 +1,6 @@
 """Crypto micro-trading bot — trailing stops + time exits + 5 simultaneous positions."""
 import time
+import json
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -13,6 +14,8 @@ from analysis.indicators import add_indicators, summarize_indicators
 from utils.logger import logger
 import firebase_writer as fb
 
+_ENTRY_PRICES_FILE = os.path.join(os.path.dirname(__file__), "../logs/entry_prices.json")
+
 
 class CryptoBot:
     def __init__(self, exchange: BaseCryptoExchange):
@@ -21,11 +24,36 @@ class CryptoBot:
         self.risk     = CryptoRiskManager(exchange)
         self._cycle   = 0
         self._entry_times: dict[str, datetime] = {}
+        self._entry_prices: dict[str, float] = self._load_entry_prices()
         self._trailing = TrailingStopManager(
             trail_pct       = crypto_config.TRAIL_PCT,
             take_profit_pct = crypto_config.TAKE_PROFIT_PCT,
             activate_pct    = crypto_config.TRAIL_ACTIVATE_PCT,
         )
+
+    def _load_entry_prices(self) -> dict[str, float]:
+        try:
+            with open(_ENTRY_PRICES_FILE) as f:
+                data = json.load(f)
+            logger.info(f"[BOT] Loaded entry prices for {list(data.keys())}")
+            return data
+        except Exception:
+            return {}
+
+    def _save_entry_prices(self):
+        try:
+            os.makedirs(os.path.dirname(_ENTRY_PRICES_FILE), exist_ok=True)
+            with open(_ENTRY_PRICES_FILE, "w") as f:
+                json.dump(self._entry_prices, f, indent=2)
+        except Exception as e:
+            logger.warning(f"[BOT] Could not save entry prices: {e}")
+
+    def _apply_entry_overrides(self, positions: dict) -> dict:
+        """Patch avg_entry from our tracked prices — more reliable than Robinhood cost_bases."""
+        for pair, pos in positions.items():
+            if pair in self._entry_prices:
+                pos.avg_entry = self._entry_prices[pair]
+        return positions
 
     def run_cycle(self):
         self._cycle += 1
@@ -36,7 +64,7 @@ class CryptoBot:
 
         # 1. Fixed SL/TP check
         try:
-            positions = self.exchange.get_positions()
+            positions = self._apply_entry_overrides(self.exchange.get_positions())
             for pair, qty in self.risk.check_sl_tp(positions):
                 self._sell(pair, qty, reason="SL/TP")
         except Exception as e:
@@ -44,7 +72,7 @@ class CryptoBot:
 
         # 2. Trailing stop check (once position hits +0.8% profit, replaces fixed TP)
         try:
-            positions = self.exchange.get_positions()
+            positions = self._apply_entry_overrides(self.exchange.get_positions())
             prices = {pair: pos.current_price for pair, pos in positions.items()}
             for pair in self._trailing.update_all(prices):
                 pos = positions.get(pair)
@@ -55,7 +83,7 @@ class CryptoBot:
 
         # 3. Time-based exit — free up capital stuck in chop
         try:
-            positions = self.exchange.get_positions()
+            positions = self._apply_entry_overrides(self.exchange.get_positions())
             cutoff = datetime.now() - timedelta(minutes=crypto_config.TIME_EXIT_MINUTES)
             for pair, entry_time in list(self._entry_times.items()):
                 if pair in positions and entry_time < cutoff:
@@ -70,16 +98,21 @@ class CryptoBot:
 
         # 4. Scan for new signals
         usdt     = self.exchange.get_usdt_balance()
-        positions = self.exchange.get_positions()
+        positions = self._apply_entry_overrides(self.exchange.get_positions())
 
         for pair in crypto_config.PAIRS:
+            if pair in crypto_config.EXCLUDED_PAIRS:
+                continue
             try:
                 self._analyze_and_trade(pair, usdt, positions)
                 time.sleep(0.5)
             except Exception as e:
                 logger.error(f"Error on {pair}: {e}", exc_info=False)
 
-        self._print_summary()
+        try:
+            self._print_summary()
+        except Exception as e:
+            logger.error(f"[BOT] Summary error: {e}")
 
     def _analyze_and_trade(self, pair: str, usdt: float, positions: dict):
         # Skip pairs unsupported by the current exchange (e.g. BNB on Robinhood)
@@ -115,6 +148,8 @@ class CryptoBot:
         try:
             order = self.exchange.buy_market(pair, signal.usdt_amount)
             self._entry_times[pair] = datetime.now()
+            self._entry_prices[pair] = order.price
+            self._save_entry_prices()
             self._trailing.register(pair, order.price)
             if signal:
                 logger.info(
@@ -127,9 +162,12 @@ class CryptoBot:
 
     def _sell(self, pair: str, qty: float, signal=None, reason: str = ""):
         try:
-            pos = self.exchange.get_positions().get(pair)
+            positions = self._apply_entry_overrides(self.exchange.get_positions())
+            pos = positions.get(pair)
             order = self.exchange.sell_market(pair, qty)
             self._entry_times.pop(pair, None)
+            self._entry_prices.pop(pair, None)
+            self._save_entry_prices()
             self._trailing.remove(pair)
             if pos:
                 pnl_pct = (order.price - pos.avg_entry) / pos.avg_entry if pos.avg_entry else 0
@@ -144,7 +182,7 @@ class CryptoBot:
     def _print_summary(self):
         usdt      = self.exchange.get_usdt_balance()
         total     = self.exchange.get_portfolio_value()
-        positions = self.exchange.get_positions()
+        positions = self._apply_entry_overrides(self.exchange.get_positions())
 
         logger.info(f"\nPORTFOLIO  USDT: ${usdt:,.2f}  |  Total: ${total:,.2f}")
         pnl_pct, pnl_usd = 0.0, 0.0
