@@ -1,0 +1,23 @@
+# Secrets — NEVER commit these
+.env
+*.env
+td_token.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Logs
+logs/*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local Netlify folder
+.netlify
