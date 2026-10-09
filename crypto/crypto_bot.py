@@ -406,7 +406,7 @@ class CryptoBot:
 
         logger.info(f"\nPORTFOLIO  USDT: ${usdt:,.2f}  |  Total: ${total:,.2f}")
         # Mark value overstates what we could cash out; use the bid-based liquidation value for P&L.
-        net_pnl = {}
+        net_pnl, costs = {}, {}
         liq_positions = 0.0
         for pair, pos in positions.items():
             exit_px = self._exit_value(pair, pos)
@@ -414,6 +414,7 @@ class CryptoBot:
             cost = self._cost_basis(pair, pos.avg_entry)
             if cost:
                 net_pnl[pair] = (exit_px - cost) / cost
+                costs[pair] = cost
         liquidation = usdt + liq_positions
         logger.info(f"LIQUIDATION VALUE (at bid): ${liquidation:,.2f}  (spread haircut ${total - liquidation:,.2f})")
         total = liquidation
@@ -429,7 +430,7 @@ class CryptoBot:
             fb.push_status, total, pnl_pct, pnl_usd, self._cycle,
             self.tracker.daily_trades(), self.tracker.win_rate(), crypto_config.MAX_OPEN_TRADES,
         )
-        fb.push_async(fb.push_positions, positions, net_pnl)
+        fb.push_async(fb.push_positions, positions, net_pnl, costs)
         fb.push_async(fb.push_equity, total)
         fb.push_async(fb.push_market, self._fg, self._llm_paused())
         fb.push_async(fb.push_accuracy, self.tracker.summary())

@@ -74,13 +74,13 @@ def push_status(
     })
 
 
-def push_positions(positions: dict, net_pnl: Optional[dict] = None):
+def push_positions(positions: dict, net_pnl: Optional[dict] = None, costs: Optional[dict] = None):
     """positions: {pair -> CryptoPosition or stock Position}; net_pnl overrides P&L with the sell-now value."""
     data = {}
     for pair, pos in positions.items():
         key = pair.replace("/", "-")
         pnl = (net_pnl or {}).get(pair, getattr(pos, "unrealized_pnl_pct", None))
-        entry = getattr(pos, "avg_entry", getattr(pos, "average_buy_price", None))
+        entry = (costs or {}).get(pair) or getattr(pos, "avg_entry", getattr(pos, "average_buy_price", None))
         current = getattr(pos, "current_price", None)
         qty = getattr(pos, "qty", getattr(pos, "quantity", None))
         data[key] = {
