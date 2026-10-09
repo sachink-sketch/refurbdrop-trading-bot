@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>REFURBDROP Trading Bot</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<meta name="theme-color" content="#0d1117">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
 <style>
@@ -161,6 +164,7 @@
     <div class="card"><div class="label">Bot Cycle</div><div class="val" id="c-cycle">--</div></div>
     <div class="card"><div class="label">Daily Trades</div><div class="val" id="c-trades">--</div></div>
     <div class="card"><div class="label">Win Rate</div><div class="val" id="c-winrate">--</div></div>
+    <div class="card"><div class="label">Fear &amp; Greed</div><div class="val" id="c-fng">--</div></div>
   </div>
 
   <!-- Bot countdown timers -->
@@ -192,6 +196,20 @@
         <div class="timer-name">Stock Bot</div>
       </div>
       <div class="timer-countdown" id="stock-timer">5:00</div>
+    </div>
+  </div>
+
+  <div class="two-col">
+    <div class="section">
+      <div class="section-title"><span class="live-dot" style="background:var(--green)"></span> Equity Curve <span id="eq-range" style="margin-left:auto;font-size:11px;color:var(--muted);font-weight:400"></span></div>
+      <svg id="eq-chart" viewBox="0 0 600 160" preserveAspectRatio="none" style="width:100%;height:160px;display:block"></svg>
+    </div>
+    <div class="section">
+      <div class="section-title"><span class="live-dot" style="background:var(--purple)"></span> Signal Accuracy (closed BUYs)</div>
+      <table>
+        <thead><tr><th>Confidence</th><th>Trades</th><th>Win rate</th><th>Avg P&amp;L</th></tr></thead>
+        <tbody id="acc-body"><tr class="empty-row"><td colspan="4">No closed trades tracked yet</td></tr></tbody>
+      </table>
     </div>
   </div>
 
@@ -230,6 +248,8 @@ const firebaseConfig = {
   messagingSenderId: "1006561441617",
   appId:             "1:1006561441617:web:3b32828944268b17bc8570",
 };
+
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 
 const app = initializeApp(firebaseConfig);
 const db  = getDatabase(app);
@@ -461,6 +481,49 @@ function startListening() {
   setInterval(tickStock, 1000);
   tickStock();
 
+  // Fear & Greed
+  onValue(ref(db, 'market'), snap => {
+    const m = snap.val();
+    if (!m) return;
+    const el = document.getElementById('c-fng');
+    el.textContent = `${m.fng_value} · ${m.fng_label}`;
+    el.className = 'val ' + (m.fng_value < 35 ? 'red' : m.fng_value > 65 ? 'green' : '');
+  });
+
+  // Signal accuracy by confidence bucket
+  onValue(ref(db, 'accuracy'), snap => {
+    const a = snap.val();
+    const body = document.getElementById('acc-body');
+    if (!a) return;
+    const rows = Object.entries(a);
+    if (rows.every(([, v]) => !v.trades)) return;
+    body.innerHTML = rows.map(([k, v]) => {
+      const wr = v.trades ? Math.round(v.wins / v.trades * 100) + '%' : '--';
+      const cls = v.avg_pnl >= 0 ? 'green' : 'red';
+      return `<tr><td><strong>${k}</strong></td><td>${v.trades}</td><td>${wr}</td>
+        <td class="${cls}">${v.trades ? (v.avg_pnl >= 0 ? '+' : '') + v.avg_pnl.toFixed(2) + '%' : '--'}</td></tr>`;
+    }).join('');
+  });
+
+  // Equity curve (last 300 cycle snapshots)
+  onValue(query(ref(db, 'equity'), orderByKey(), limitToLast(300)), snap => {
+    const pts = Object.values(snap.val() || {}).filter(p => p.v != null);
+    const svg = document.getElementById('eq-chart');
+    if (pts.length < 2) { svg.innerHTML = ''; return; }
+    const vals = pts.map(p => p.v);
+    const lo = Math.min(...vals), hi = Math.max(...vals);
+    const span = (hi - lo) || 1;
+    const xy = pts.map((p, i) => `${(i / (pts.length - 1) * 600).toFixed(1)},${(150 - (p.v - lo) / span * 140).toFixed(1)}`);
+    const up = vals[vals.length - 1] >= vals[0];
+    const color = up ? '#3fb950' : '#f85149';
+    svg.innerHTML =
+      `<polygon points="0,160 ${xy.join(' ')} 600,160" fill="${color}" fill-opacity="0.12"/>` +
+      `<polyline points="${xy.join(' ')}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
+    const chg = vals[vals.length - 1] - vals[0];
+    document.getElementById('eq-range').textContent =
+      `$${lo.toFixed(2)} – $${hi.toFixed(2)} · ${chg >= 0 ? '+' : ''}$${chg.toFixed(2)} · ${pts[0].t} → ${pts[pts.length - 1].t}`;
+  });
+
   // Trade events
   const eventsRef = query(ref(db, 'trade_events'), orderByKey(), limitToLast(10));
   onValue(eventsRef, snap => {
@@ -469,7 +532,7 @@ function startListening() {
     const evBody = document.getElementById('events-body');
     if (arr.length === 0) { evBody.innerHTML = '<div style="color:var(--muted);text-align:center;padding:20px;font-size:13px">No trades yet</div>'; return; }
     const tagMap = {
-      'BUY':'tag-buy','SELL':'tag-sell','TAKE PROFIT':'tag-tp',
+      'BUY':'tag-buy','SELL':'tag-sell','TAKE PROFIT':'tag-tp','PARTIAL TP':'tag-tp',
       'STOP LOSS':'tag-sl','TRAILING STOP':'tag-trail','TIME EXIT':'tag-time'
     };
     evBody.innerHTML = arr.map(e => {

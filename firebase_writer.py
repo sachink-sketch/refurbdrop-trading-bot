@@ -102,6 +102,8 @@ def push_signals(signals: list):
             "action":     s.get("action"),
             "confidence": s.get("confidence"),
             "reason":     s.get("reason", "")[:100],
+            "sl_pct":     s.get("sl_pct"),
+            "tp_pct":     s.get("tp_pct"),
         }
     _put("signals", data)
 
@@ -117,6 +119,20 @@ def push_trade_event(event_type: str, pair: str, price: float, pnl_pct: Optional
         "pnl_pct": _safe(pnl_pct),
         "time":    ts,
     })
+
+
+def push_equity(total: float):
+    """One equity-curve point per cycle; keys sort chronologically."""
+    key = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    _put(f"equity/{key}", {"t": datetime.now().strftime("%m/%d %H:%M"), "v": _safe(round(total, 2))})
+
+
+def push_market(fear_greed: dict):
+    _put("market", {"fng_value": fear_greed.get("value"), "fng_label": fear_greed.get("label")})
+
+
+def push_accuracy(summary: dict):
+    _put("accuracy", summary)
 
 
 def push_async(fn, *args, **kwargs):

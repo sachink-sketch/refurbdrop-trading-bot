@@ -1,4 +1,4 @@
-"""Crypto micro-trading bot — trailing stops + time exits + 5 simultaneous positions."""
+"""Crypto micro-trading bot — multi-timeframe + sentiment gating, ATR stops, partial exits, trailing stops."""
 import time
 import json
 import sys, os
@@ -10,11 +10,45 @@ from crypto.claude_crypto import ClaudeCryptoAnalyst
 from crypto.crypto_risk import CryptoRiskManager
 from crypto.crypto_config import crypto_config
 from crypto.trailing_stop import TrailingStopManager
+from crypto.market_context import get_fear_greed
+from crypto.notifier import notify
+from crypto.signal_tracker import SignalTracker
 from analysis.indicators import add_indicators, summarize_indicators
 from utils.logger import logger
 import firebase_writer as fb
 
 _ENTRY_PRICES_FILE = os.path.join(os.path.dirname(__file__), "../logs/entry_prices.json")
+_META_FILE = os.path.join(os.path.dirname(__file__), "../logs/position_meta.json")
+
+_HTF_CACHE_SECONDS = 600
+_PARTIAL_AT_FRACTION_OF_TP = 0.5
+_MIN_PARTIAL_USD = 5.0
+
+
+def _atr_levels(ind: dict) -> tuple[float, float]:
+    """Volatility-scaled (stop, target): stop = 2x ATR clamped to 0.6-2.0%, target = 2.5x stop."""
+    price, atr = ind.get("price") or 0, ind.get("atr") or 0
+    if price <= 0 or atr <= 0:
+        return crypto_config.STOP_LOSS_PCT, crypto_config.TAKE_PROFIT_PCT
+    sl = min(max(2.0 * atr / price, 0.006), 0.02)
+    return sl, sl * 2.5
+
+
+def _load_json(path: str) -> dict:
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_json(path: str, data: dict):
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        logger.warning(f"[BOT] Could not save {os.path.basename(path)}: {e}")
 
 
 class CryptoBot:
@@ -22,10 +56,14 @@ class CryptoBot:
         self.exchange = exchange
         self.analyst  = ClaudeCryptoAnalyst()
         self.risk     = CryptoRiskManager(exchange)
+        self.tracker  = SignalTracker()
         self._cycle   = 0
         self._entry_times: dict[str, datetime] = {}
         self._entry_prices: dict[str, float] = self._load_entry_prices()
+        self._meta: dict[str, dict] = _load_json(_META_FILE)
         self._cycle_signals: list[dict] = []
+        self._fg: dict = {"value": 50, "label": "Neutral"}
+        self._htf_cache: dict[str, tuple[float, dict]] = {}
         self._trailing = TrailingStopManager(
             trail_pct       = crypto_config.TRAIL_PCT,
             take_profit_pct = crypto_config.TAKE_PROFIT_PCT,
@@ -33,21 +71,22 @@ class CryptoBot:
         )
 
     def _load_entry_prices(self) -> dict[str, float]:
-        try:
-            with open(_ENTRY_PRICES_FILE) as f:
-                data = json.load(f)
+        data = _load_json(_ENTRY_PRICES_FILE)
+        if data:
             logger.info(f"[BOT] Loaded entry prices for {list(data.keys())}")
-            return data
-        except Exception:
-            return {}
+        return data
 
     def _save_entry_prices(self):
-        try:
-            os.makedirs(os.path.dirname(_ENTRY_PRICES_FILE), exist_ok=True)
-            with open(_ENTRY_PRICES_FILE, "w") as f:
-                json.dump(self._entry_prices, f, indent=2)
-        except Exception as e:
-            logger.warning(f"[BOT] Could not save entry prices: {e}")
+        _save_json(_ENTRY_PRICES_FILE, self._entry_prices)
+
+    def _save_meta(self):
+        _save_json(_META_FILE, self._meta)
+
+    def _levels(self, pair: str) -> tuple[float, float]:
+        m = self._meta.get(pair)
+        if m:
+            return m["sl"], m["tp"]
+        return crypto_config.STOP_LOSS_PCT, crypto_config.TAKE_PROFIT_PCT
 
     def _apply_entry_overrides(self, positions: dict) -> dict:
         """Patch avg_entry from our tracked prices — more reliable than Robinhood cost_bases."""
@@ -63,17 +102,25 @@ class CryptoBot:
         logger.info(f"CRYPTO Cycle #{self._cycle} -- {now}")
         logger.info(f"{'=' * 56}")
 
-        # 1. Fixed SL/TP check
+        self._fg = get_fear_greed()
+        fb.push_async(fb.push_market, self._fg)
+
+        # 1. Fixed/ATR SL/TP check
         try:
             positions = self._apply_entry_overrides(self.exchange.get_positions())
-            for pair, qty in self.risk.check_sl_tp(positions):
+            levels = {p: self._levels(p) for p in positions}
+            for pair, qty in self.risk.check_sl_tp(positions, levels):
                 self._sell(pair, qty, reason="SL/TP")
         except Exception as e:
             logger.error(f"SL/TP check error: {e}")
 
-        # 2. Trailing stop check (once position hits +0.8% profit, replaces fixed TP)
+        # 2. Trailing stop check (also re-arms stops for positions that survived a restart)
         try:
             positions = self._apply_entry_overrides(self.exchange.get_positions())
+            for pair, pos in positions.items():
+                if pos.value_usdt >= 5.0 and not self._trailing.is_registered(pair):
+                    sl, tp = self._levels(pair)
+                    self._trailing.register(pair, pos.avg_entry, max(sl * 0.45, 0.0025), tp, sl)
             prices = {pair: pos.current_price for pair, pos in positions.items()}
             for pair in self._trailing.update_all(prices):
                 pos = positions.get(pair)
@@ -81,6 +128,18 @@ class CryptoBot:
                     self._sell(pair, pos.qty, reason="TRAIL")
         except Exception as e:
             logger.error(f"Trailing stop check error: {e}")
+
+        # 2b. Partial profit: bank half at 50% of the target, let the rest ride the trailing stop
+        try:
+            positions = self._apply_entry_overrides(self.exchange.get_positions())
+            for pair, pos in positions.items():
+                _, tp = self._levels(pair)
+                done = self._meta.get(pair, {}).get("partial_done", False)
+                if (not done and pos.value_usdt * 0.5 >= _MIN_PARTIAL_USD
+                        and pos.unrealized_pnl_pct >= tp * _PARTIAL_AT_FRACTION_OF_TP):
+                    self._sell_partial(pair, pos)
+        except Exception as e:
+            logger.error(f"Partial exit check error: {e}")
 
         # 3. Time-based exit — free up capital stuck in chop
         try:
@@ -115,6 +174,46 @@ class CryptoBot:
         except Exception as e:
             logger.error(f"[BOT] Summary error: {e}")
 
+    def _get_higher_tf(self, pair: str) -> dict:
+        cached = self._htf_cache.get(pair)
+        if cached and time.time() - cached[0] < _HTF_CACHE_SECONDS:
+            return cached[1]
+        try:
+            df = self.exchange.get_ohlcv(pair, timeframe="1h", limit=100)
+            ind = summarize_indicators(add_indicators(df))
+        except Exception as e:
+            logger.debug(f"1H data unavailable for {pair}: {e}")
+            ind = cached[1] if cached else {}
+        self._htf_cache[pair] = (time.time(), ind)
+        return ind
+
+    def _apply_context(self, signal, ind: dict, ind_1h: dict):
+        """Adjust a BUY for 1H trend + market sentiment, and set ATR-scaled stop/target."""
+        notes = []
+        if signal.action == "BUY":
+            if ind_1h:
+                above50, macd = ind_1h.get("price_above_ema50"), ind_1h.get("macd_bullish")
+                if not above50 and not macd:
+                    signal.confidence = max(0.0, signal.confidence - 0.10)
+                    notes.append("1H bearish -10%")
+                elif above50 and macd:
+                    signal.confidence = min(0.95, signal.confidence + 0.05)
+                    notes.append("1H bullish +5%")
+            fg = self._fg["value"]
+            if fg < 20:
+                signal.action = "HOLD"
+                notes.append(f"BLOCKED: extreme fear ({fg})")
+            elif (fg < 35 or fg > 80) and signal.confidence < 0.75:
+                signal.action = "HOLD"
+                notes.append(f"BLOCKED: F&G {fg} needs 75%+")
+            elif fg < 35:
+                signal.usdt_amount *= 0.5
+                notes.append(f"F&G {fg}: half size")
+        signal.stop_loss_pct, signal.take_profit_pct = _atr_levels(ind)
+        if notes:
+            signal.reasoning = f"[{'; '.join(notes)}] {signal.reasoning}"
+            logger.info(f"  {signal.pair} context: {'; '.join(notes)}")
+
     def _analyze_and_trade(self, pair: str, usdt: float, positions: dict):
         # Skip pairs unsupported by the current exchange (e.g. BNB on Robinhood)
         if hasattr(self.exchange, "supports_pair") and not self.exchange.supports_pair(pair):
@@ -124,19 +223,25 @@ class CryptoBot:
         )
         df  = add_indicators(df)
         ind = summarize_indicators(df)
+        ind_1h = self._get_higher_tf(pair)
 
-        signal = self.analyst.analyze(pair, ind, usdt, {
-            p: {"qty": pos.qty, "entry": pos.avg_entry, "pnl_pct": pos.unrealized_pnl_pct}
-            for p, pos in positions.items()
-        })
+        signal = self.analyst.analyze(
+            pair, ind, usdt,
+            {p: {"qty": pos.qty, "entry": pos.avg_entry, "pnl_pct": pos.unrealized_pnl_pct}
+             for p, pos in positions.items()},
+            higher_tf=ind_1h,
+            fear_greed=self._fg,
+            calibration=self.tracker.prompt_summary(),
+        )
+        self._apply_context(signal, ind, ind_1h)
 
         self._cycle_signals.append({
             "pair":       pair,
             "action":     signal.action,
             "confidence": round(signal.confidence * 100),
             "reason":     signal.reasoning[:120],
-            "sl_pct":     round(signal.stop_loss_pct * 100, 1),
-            "tp_pct":     round(signal.take_profit_pct * 100, 1),
+            "sl_pct":     round(signal.stop_loss_pct * 100, 2),
+            "tp_pct":     round(signal.take_profit_pct * 100, 2),
         })
 
         if signal.action == "HOLD":
@@ -160,15 +265,32 @@ class CryptoBot:
             self._entry_times[pair] = datetime.now()
             self._entry_prices[pair] = order.price
             self._save_entry_prices()
-            self._trailing.register(pair, order.price)
-            if signal:
-                logger.info(
-                    f"  Factors: {', '.join(signal.key_factors[:3])}\n"
-                    f"  SL: {signal.stop_loss_pct:.1%}  TP: {signal.take_profit_pct:.1%}"
-                )
+            sl, tp = signal.stop_loss_pct, signal.take_profit_pct
+            self._meta[pair] = {"sl": sl, "tp": tp, "partial_done": False}
+            self._save_meta()
+            self._trailing.register(pair, order.price, max(sl * 0.45, 0.0025), tp, sl)
+            self.tracker.record_entry(pair, signal.confidence)
+            logger.info(
+                f"  Factors: {', '.join(signal.key_factors[:3])}\n"
+                f"  SL: {sl:.1%}  TP: {tp:.1%}  (ATR-scaled)"
+            )
             fb.push_async(fb.push_trade_event, "BUY", pair, order.price)
+            notify(f"BUY {pair} @ ${order.price:,.4f} | conf {signal.confidence:.0%} | SL {sl:.2%} TP {tp:.2%}")
         except Exception as e:
             logger.error(f"BUY {pair} failed: {e}")
+
+    def _sell_partial(self, pair: str, pos):
+        try:
+            qty = pos.qty * 0.5
+            order = self.exchange.sell_market(pair, qty)
+            self._meta.setdefault(pair, {}).update(partial_done=True)
+            self._save_meta()
+            pnl_pct = (order.price - pos.avg_entry) / pos.avg_entry if pos.avg_entry else 0
+            logger.info(f"  PARTIAL TP {pair}: sold half at {pnl_pct:+.2%}, rest rides trailing stop")
+            fb.push_async(fb.push_trade_event, "PARTIAL TP", pair, order.price, pnl_pct)
+            notify(f"PARTIAL TP {pair}: sold half @ ${order.price:,.4f} ({pnl_pct:+.2%})")
+        except Exception as e:
+            logger.error(f"PARTIAL sell {pair} failed: {e}")
 
     def _sell(self, pair: str, qty: float, signal=None, reason: str = ""):
         try:
@@ -178,14 +300,18 @@ class CryptoBot:
             self._entry_times.pop(pair, None)
             self._entry_prices.pop(pair, None)
             self._save_entry_prices()
+            self._meta.pop(pair, None)
+            self._save_meta()
             self._trailing.remove(pair)
             if pos:
                 pnl_pct = (order.price - pos.avg_entry) / pos.avg_entry if pos.avg_entry else 0
                 tag = f"[{reason}]" if reason else ""
                 logger.info(f"  CLOSED {tag} {pair}: {pnl_pct:+.2%} (${pnl_pct * pos.value_usdt:+.2f})")
                 self.analyst.record_outcome(pair, "SELL", pos.avg_entry, order.price, pnl_pct)
+                self.tracker.record_exit(pair, pnl_pct)
                 event_type = {"SL/TP": "STOP LOSS", "TRAIL": "TRAILING STOP", "TIME": "TIME EXIT"}.get(reason, "SELL")
                 fb.push_async(fb.push_trade_event, event_type, pair, order.price, pnl_pct)
+                notify(f"{event_type} {pair} @ ${order.price:,.4f} ({pnl_pct:+.2%}, ${pnl_pct * pos.value_usdt:+.2f})")
         except Exception as e:
             logger.error(f"SELL {pair} failed: {e}")
 
@@ -204,6 +330,8 @@ class CryptoBot:
         # Push to Firebase (non-blocking)
         fb.push_async(fb.push_status, total, pnl_pct, pnl_usd, self._cycle)
         fb.push_async(fb.push_positions, positions)
+        fb.push_async(fb.push_equity, total)
+        fb.push_async(fb.push_accuracy, self.tracker.summary())
         if self._cycle_signals:
             fb.push_async(fb.push_signals, self._cycle_signals)
             self._cycle_signals = []

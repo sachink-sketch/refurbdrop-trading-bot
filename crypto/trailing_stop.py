@@ -66,13 +66,21 @@ class TrailingStopManager:
         self.activate_pct    = activate_pct
         self._stops: dict[str, TrailingStop] = {}
 
-    def register(self, pair: str, entry_price: float):
-        self._stops[pair] = TrailingStop(
-            pair, entry_price, self.trail_pct, self.take_profit_pct, self.activate_pct
-        )
+    def is_registered(self, pair: str) -> bool:
+        return pair in self._stops
+
+    def register(
+        self, pair: str, entry_price: float,
+        trail_pct: float | None = None, take_profit_pct: float | None = None,
+        activate_pct: float | None = None,
+    ):
+        trail = trail_pct if trail_pct is not None else self.trail_pct
+        tp    = take_profit_pct if take_profit_pct is not None else self.take_profit_pct
+        act   = activate_pct if activate_pct is not None else self.activate_pct
+        self._stops[pair] = TrailingStop(pair, entry_price, trail, tp, act)
         logger.info(
             f"Trailing stop registered {pair} @ ${entry_price:.4f} | "
-            f"activates at +{self.activate_pct:.1%} | trail {self.trail_pct:.1%} below peak"
+            f"activates at +{act:.1%} | trail {trail:.2%} below peak | TP {tp:.1%}"
         )
 
     def update_all(self, prices: dict[str, float]) -> list[str]:

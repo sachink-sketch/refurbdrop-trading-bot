@@ -42,6 +42,10 @@ DO NOT HOLD when:
 
 RISK/REWARD: Minimum 1:1.5. Prefer 1:2. Use tight stops (0.6-1.0%) with 1.2-2.0% targets.
 
+MULTI-TIMEFRAME: You also receive the 1-HOUR trend. 5m BUY + 1H bullish = high-conviction. 5m BUY + 1H bearish (below EMA50, MACD bearish) = counter-trend: lower confidence and say so. Never rate a counter-trend BUY above 0.70.
+
+MARKET SENTIMENT (Fear & Greed 0-100): <20 extreme fear = do not BUY. 20-35 fear = BUY only at 0.75+ confidence. 35-65 normal. 65-80 greed = normal entries. >80 extreme greed = BUY only momentum continuation at 0.75+.
+
 Respond ONLY with valid JSON:
 {
   "action": "BUY" | "SELL" | "HOLD",
@@ -68,9 +72,14 @@ class ClaudeCryptoAnalyst:
         indicators: dict,
         portfolio_usdt: float,
         open_positions: dict,
+        higher_tf: dict | None = None,
+        fear_greed: dict | None = None,
+        calibration: str = "",
     ) -> CryptoSignal:
 
-        prompt = self._build_prompt(pair, indicators, portfolio_usdt, open_positions)
+        prompt = self._build_prompt(
+            pair, indicators, portfolio_usdt, open_positions, higher_tf, fear_greed, calibration
+        )
         response = self.client.messages.create(
             model=self.model,
             max_tokens=4096,
@@ -114,7 +123,23 @@ class ClaudeCryptoAnalyst:
         if len(self._trade_history) > 30:
             self._trade_history.pop(0)
 
-    def _build_prompt(self, pair: str, ind: dict, usdt: float, positions: dict) -> str:
+    def _build_prompt(
+        self, pair: str, ind: dict, usdt: float, positions: dict,
+        higher_tf: dict | None = None, fear_greed: dict | None = None, calibration: str = "",
+    ) -> str:
+        context = ""
+        if higher_tf:
+            h = higher_tf
+            context += (
+                f"\n\n1-HOUR TREND: price>EMA21 {h.get('price_above_ema21')} | price>EMA50 {h.get('price_above_ema50')} "
+                f"| MACD bullish {h.get('macd_bullish')} | EMA stacked {h.get('trend_up')} "
+                f"| RSI {h.get('rsi', 50):.1f} | BB% {h.get('bb_pct', 0.5):.2f}"
+            )
+        if fear_greed:
+            context += f"\nFEAR & GREED INDEX: {fear_greed['value']} ({fear_greed['label']})"
+        if calibration:
+            context += f"\n{calibration}"
+
         history = ""
         if self._trade_history:
             wins = sum(1 for t in self._trade_history if t["result"] == "WIN")
@@ -163,7 +188,7 @@ KEY INDICATORS:
   EMA stacked:  {ind.get('trend_up', False)}
   OBV rising:   {ind.get('obv_rising', False)}
 
-SIGNALS DETECTED: {factors if factors else ['No strong signals']}
+SIGNALS DETECTED: {factors if factors else ['No strong signals']}{context}
 
 PORTFOLIO: ${usdt:.2f} USDT available | {len(positions)} open positions{pos_block}{history}
 

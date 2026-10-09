@@ -42,8 +42,9 @@ class CryptoConfig:
     CANDLE_LIMIT: int = int(os.getenv("CRYPTO_CANDLE_LIMIT", "200"))           # last 200 candles (~16 hrs)
 
     # Risk — tuned for maximum daily P&L on ~$300 account
-    MAX_POSITION_PCT: float  = float(os.getenv("CRYPTO_MAX_POSITION_PCT", "0.20"))   # 20% per trade = ~$60/slot
-    MAX_OPEN_TRADES: int     = int(os.getenv("CRYPTO_MAX_OPEN_TRADES", "8"))
+    # Crypto majors are ~90% correlated, so 6+ positions is really one big bet. Fewer, larger slots instead.
+    MAX_POSITION_PCT: float  = float(os.getenv("CRYPTO_MAX_POSITION_PCT", "0.30"))   # 30% per trade
+    MAX_OPEN_TRADES: int     = int(os.getenv("CRYPTO_MAX_OPEN_TRADES", "3"))
     STOP_LOSS_PCT: float     = float(os.getenv("CRYPTO_STOP_LOSS_PCT", "0.008"))     # 0.8% SL — tight
     TAKE_PROFIT_PCT: float   = float(os.getenv("CRYPTO_TAKE_PROFIT_PCT", "0.020"))   # 2.0% TP (2.5:1 R/R)
     MAX_DAILY_LOSS_PCT: float = float(os.getenv("CRYPTO_MAX_DAILY_LOSS_PCT", "0.04"))# 4% daily loss cap

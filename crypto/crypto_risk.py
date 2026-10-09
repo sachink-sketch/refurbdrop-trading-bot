@@ -66,15 +66,18 @@ class CryptoRiskManager:
 
         return True, "Approved"
 
-    def check_sl_tp(self, positions: dict[str, CryptoPosition]) -> list[tuple[str, float]]:
-        """Returns list of (pair, qty) to sell for SL or TP hits."""
+    def check_sl_tp(
+        self, positions: dict[str, CryptoPosition], levels: dict[str, tuple[float, float]] | None = None
+    ) -> list[tuple[str, float]]:
+        """Returns list of (pair, qty) to sell for SL or TP hits. levels: pair -> (sl_pct, tp_pct)."""
         exits = []
         for pair, pos in positions.items():
             pnl = pos.unrealized_pnl_pct
-            if pnl <= -crypto_config.STOP_LOSS_PCT:
+            sl, tp = (levels or {}).get(pair, (crypto_config.STOP_LOSS_PCT, crypto_config.TAKE_PROFIT_PCT))
+            if pnl <= -sl:
                 logger.warning(f"STOP LOSS {pair}: {pnl:.3%}")
                 exits.append((pair, pos.qty))
-            elif pnl >= crypto_config.TAKE_PROFIT_PCT:
+            elif pnl >= tp:
                 logger.info(f"TAKE PROFIT {pair}: {pnl:.3%}")
                 exits.append((pair, pos.qty))
         return exits
