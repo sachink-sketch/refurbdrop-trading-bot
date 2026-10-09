@@ -104,6 +104,7 @@ def push_signals(signals: list):
             "action":     s.get("action"),
             "confidence": s.get("confidence"),
             "reason":     s.get("reason", "")[:100],
+            "spread_pct": s.get("spread_pct"),
             "sl_pct":     s.get("sl_pct"),
             "tp_pct":     s.get("tp_pct"),
         }

@@ -46,6 +46,10 @@ class BaseCryptoExchange(ABC):
     @abstractmethod
     def get_price(self, pair: str) -> float: ...
 
+    def get_spread_pct(self, pair: str) -> float | None:
+        """Bid/ask spread as a fraction of mid price, or None if the exchange can't tell."""
+        return None
+
     @abstractmethod
     def get_usdt_balance(self) -> float: ...
 

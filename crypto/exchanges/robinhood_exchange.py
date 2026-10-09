@@ -86,6 +86,17 @@ class RobinhoodCryptoExchange(BaseCryptoExchange):
         quote = _retry(lambda: self._rh.crypto.get_crypto_quote(sym))
         return float(quote.get("mark_price") or quote.get("ask_price") or 0)
 
+    def get_spread_pct(self, pair: str) -> float | None:
+        try:
+            quote = _retry(lambda: self._rh.crypto.get_crypto_quote(_symbol(pair)))
+            bid, ask = float(quote.get("bid_price") or 0), float(quote.get("ask_price") or 0)
+            if bid <= 0 or ask <= 0 or ask < bid:
+                return None
+            return (ask - bid) / ((ask + bid) / 2)
+        except Exception as e:
+            logger.debug(f"[ROBINHOOD CRYPTO] spread unavailable for {pair}: {e}")
+            return None
+
     def get_usdt_balance(self) -> float:
         """Returns USD buying power available in the Robinhood account."""
         profile = _retry(lambda: self._rh.profiles.load_account_profile())

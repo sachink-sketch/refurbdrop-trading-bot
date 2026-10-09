@@ -208,7 +208,7 @@ class CryptoBot:
         self._htf_cache[pair] = (time.time(), ind)
         return ind
 
-    def _apply_context(self, signal, ind: dict, ind_1h: dict):
+    def _apply_context(self, signal, ind: dict, ind_1h: dict, spread: float | None = None):
         """Adjust a BUY for 1H trend + market sentiment, and set ATR-scaled stop/target."""
         notes = []
         if signal.action == "BUY":
@@ -231,6 +231,14 @@ class CryptoBot:
                 signal.usdt_amount *= 0.5
                 notes.append(f"F&G {fg}: half size")
         signal.stop_loss_pct, signal.take_profit_pct = _atr_levels(ind)
+        if signal.action == "BUY" and spread is not None:
+            tp, sl = signal.take_profit_pct, signal.stop_loss_pct
+            if spread > crypto_config.MAX_SPREAD_PCT or tp < crypto_config.SPREAD_COST_MULT * spread:
+                signal.action = "HOLD"
+                notes.append(f"BLOCKED: spread {spread:.2%} too wide for {tp:.1%} target")
+            else:
+                breakeven = (sl + spread) / (tp + sl)
+                notes.append(f"spread {spread:.2%}, breakeven win rate {breakeven:.0%}")
         if notes:
             signal.reasoning = f"[{'; '.join(notes)}] {signal.reasoning}"
             logger.info(f"  {signal.pair} context: {'; '.join(notes)}")
@@ -254,9 +262,11 @@ class CryptoBot:
             fear_greed=self._fg,
             calibration=self.tracker.prompt_summary(),
         )
-        self._apply_context(signal, ind, ind_1h)
+        spread = self.exchange.get_spread_pct(pair)
+        self._apply_context(signal, ind, ind_1h, spread)
 
         self._cycle_signals.append({
+            "spread_pct": round(spread * 100, 3) if spread is not None else None,
             "pair":       pair,
             "action":     signal.action,
             "confidence": round(signal.confidence * 100),

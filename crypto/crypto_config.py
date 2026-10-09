@@ -50,6 +50,10 @@ class CryptoConfig:
     MAX_DAILY_LOSS_PCT: float = float(os.getenv("CRYPTO_MAX_DAILY_LOSS_PCT", "0.04"))# 4% daily loss cap
     MIN_CONFIDENCE: float    = float(os.getenv("CRYPTO_MIN_CONFIDENCE", "0.55"))     # 55% — catches trending momentum setups
 
+    # Spread guard: a round trip costs about one full bid/ask spread, so the target must clear it comfortably
+    SPREAD_COST_MULT: float  = float(os.getenv("CRYPTO_SPREAD_COST_MULT", "3.0"))    # target >= 3x spread
+    MAX_SPREAD_PCT: float    = float(os.getenv("CRYPTO_MAX_SPREAD_PCT", "0.006"))    # never enter above 0.6% spread
+
     # Trailing stop — activates at +0.8%, trails tightly to stay in winners longer
     TRAIL_ACTIVATE_PCT: float = float(os.getenv("CRYPTO_TRAIL_ACTIVATE_PCT", "0.008"))
     TRAIL_PCT: float          = float(os.getenv("CRYPTO_TRAIL_PCT", "0.0035"))       # 0.35% trail — tighter

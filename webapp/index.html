@@ -420,6 +420,11 @@ function startListening() {
         </div>`;
       }
 
+      if (s.spread_pct != null) {
+        const wide = s.spread_pct > 0.6;
+        priceHtml += `<div class="a-prices"><span style="${wide ? 'color:var(--red)' : ''}">Spread <b>${s.spread_pct.toFixed(3)}%</b></span></div>`;
+      }
+
       const reason = (s.reason || '').substring(0, 120);
       return `<div class="a-card ${cardCls}">
         <div>
