@@ -19,6 +19,7 @@ import firebase_writer as fb
 
 _ENTRY_PRICES_FILE = os.path.join(os.path.dirname(__file__), "../logs/entry_prices.json")
 _META_FILE = os.path.join(os.path.dirname(__file__), "../logs/position_meta.json")
+_SESSION_FILE = os.path.join(os.path.dirname(__file__), "../logs/daily_baseline.json")
 
 _HTF_CACHE_SECONDS = 600
 _PARTIAL_AT_FRACTION_OF_TP = 0.5
@@ -89,11 +90,31 @@ class CryptoBot:
         return crypto_config.STOP_LOSS_PCT, crypto_config.TAKE_PROFIT_PCT
 
     def _apply_entry_overrides(self, positions: dict) -> dict:
-        """Patch avg_entry from our tracked prices — more reliable than Robinhood cost_bases."""
+        """Patch avg_entry from our tracked prices — more reliable than Robinhood cost_bases.
+
+        Robinhood returns no cost basis for some legacy holdings and the exchange then falls back to
+        the live price, pinning P&L at 0%. Pin the first-seen price so SL/TP/trailing measure real moves.
+        """
+        pinned = False
         for pair, pos in positions.items():
+            if pair not in self._entry_prices and pos.value_usdt >= 5.0 and pos.avg_entry > 0:
+                self._entry_prices[pair] = pos.avg_entry
+                pinned = True
+                logger.info(f"[BOT] Pinned entry for {pair} @ ${pos.avg_entry:.4f} (no cost basis on record)")
             if pair in self._entry_prices:
                 pos.avg_entry = self._entry_prices[pair]
+        if pinned:
+            self._save_entry_prices()
         return positions
+
+    def _daily_baseline(self, total: float) -> float:
+        """Portfolio value at the start of today; persisted so bot restarts don't reset P&L."""
+        today = datetime.now().date().isoformat()
+        d = _load_json(_SESSION_FILE)
+        if d.get("date") != today or not d.get("value"):
+            d = {"date": today, "value": total}
+            _save_json(_SESSION_FILE, d)
+        return d["value"]
 
     def run_cycle(self):
         self._cycle += 1
@@ -322,13 +343,17 @@ class CryptoBot:
 
         logger.info(f"\nPORTFOLIO  USDT: ${usdt:,.2f}  |  Total: ${total:,.2f}")
         pnl_pct, pnl_usd = 0.0, 0.0
-        if hasattr(self.exchange, "_starting_usdt"):
-            pnl_usd = total - self.exchange._starting_usdt
-            pnl_pct = pnl_usd / self.exchange._starting_usdt
+        base = getattr(self.exchange, "_starting_usdt", None) or self._daily_baseline(total)
+        if base:
+            pnl_usd = total - base
+            pnl_pct = pnl_usd / base
             logger.info(f"Session P&L: {pnl_pct:+.2%}  (${pnl_usd:+.2f})")
 
         # Push to Firebase (non-blocking)
-        fb.push_async(fb.push_status, total, pnl_pct, pnl_usd, self._cycle)
+        fb.push_async(
+            fb.push_status, total, pnl_pct, pnl_usd, self._cycle,
+            self.tracker.daily_trades(), self.tracker.win_rate(), crypto_config.MAX_OPEN_TRADES,
+        )
         fb.push_async(fb.push_positions, positions)
         fb.push_async(fb.push_equity, total)
         fb.push_async(fb.push_accuracy, self.tracker.summary())

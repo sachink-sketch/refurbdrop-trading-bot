@@ -159,7 +159,7 @@
 
   <div class="grid" id="stat-cards">
     <div class="card"><div class="label">Portfolio</div><div class="val" id="c-total">--</div></div>
-    <div class="card"><div class="label">Session P&L</div><div class="val" id="c-pnl">--</div></div>
+    <div class="card"><div class="label">Today P&L</div><div class="val" id="c-pnl">--</div></div>
     <div class="card"><div class="label">Open Positions</div><div class="val" id="c-positions">--</div></div>
     <div class="card"><div class="label">Bot Cycle</div><div class="val" id="c-cycle">--</div></div>
     <div class="card"><div class="label">Daily Trades</div><div class="val" id="c-trades">--</div></div>
@@ -303,6 +303,7 @@ document.getElementById('sign-out-btn').addEventListener('click', () => {
 
 // ── DATA LISTENERS ──
 let unsubscribers = [];
+let maxTrades = 3, lastPosCount = 0;
 
 function startListening() {
   // Main status
@@ -315,11 +316,13 @@ function startListening() {
 
     const pnlEl = document.getElementById('c-pnl');
     if (d.session_pnl_pct != null) {
-      const pct = d.session_pnl_pct;
+      const pct = d.session_pnl_pct * 100;
       const usd = d.session_pnl_usd || 0;
       pnlEl.textContent = `${pct > 0 ? '+' : ''}${pct.toFixed(2)}% ($${usd > 0 ? '+' : ''}${usd.toFixed(2)})`;
       pnlEl.className = 'val ' + (pct >= 0 ? 'green' : 'red');
     }
+    if (d.max_trades != null) maxTrades = d.max_trades;
+    document.getElementById('c-positions').textContent = lastPosCount + ' / ' + maxTrades;
     document.getElementById('c-cycle').textContent = d.cycle != null ? '#' + d.cycle : '--';
     // Reset crypto timer when bot pushes a new update
     if (d.last_updated && d.last_updated !== lastFbUpdate) {
@@ -342,8 +345,8 @@ function startListening() {
     _latestPos = positions;
     const tbody = document.getElementById('pos-body');
     const posArr = Object.values(positions);
-    document.getElementById('c-positions').textContent =
-      posArr.length + ' / 8';
+    lastPosCount = posArr.length;
+    document.getElementById('c-positions').textContent = posArr.length + ' / ' + maxTrades;
 
     if (posArr.length === 0) {
       tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No open positions — scanning...</td></tr>';

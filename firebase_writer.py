@@ -59,9 +59,11 @@ def push_status(
     session_pnl_usd: float,
     cycle: int,
     daily_trades: int = 0,
-    win_rate: float = 0.0,
+    win_rate: Optional[float] = None,
+    max_trades: int = 8,
 ):
     _put("status", {
+        "max_trades":      max_trades,
         "portfolio_total": _safe(portfolio_total),
         "session_pnl_pct": _safe(session_pnl_pct),
         "session_pnl_usd": _safe(session_pnl_usd),

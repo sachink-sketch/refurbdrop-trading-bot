@@ -1,6 +1,7 @@
 """Tracks how Claude's BUY signals actually perform, bucketed by confidence."""
 import json
 import os
+from datetime import date
 
 _FILE = os.path.join(os.path.dirname(__file__), "../logs/signal_stats.json")
 _BUCKETS = [("<65%", 0.0, 0.65), ("65-74%", 0.65, 0.75), ("75%+", 0.75, 1.01)]
@@ -10,11 +11,13 @@ class SignalTracker:
     def __init__(self):
         self._open: dict[str, float] = {}
         self._closed: list[dict] = []
+        self._entries: dict[str, int] = {}
         try:
             with open(_FILE) as f:
                 d = json.load(f)
             self._open = d.get("open", {})
             self._closed = d.get("closed", [])[-300:]
+            self._entries = d.get("entries", {})
         except Exception:
             pass
 
@@ -22,13 +25,23 @@ class SignalTracker:
         try:
             os.makedirs(os.path.dirname(_FILE), exist_ok=True)
             with open(_FILE, "w") as f:
-                json.dump({"open": self._open, "closed": self._closed[-300:]}, f)
+                json.dump({"open": self._open, "closed": self._closed[-300:], "entries": self._entries}, f)
         except Exception:
             pass
 
     def record_entry(self, pair: str, confidence: float):
         self._open[pair] = confidence
+        today = date.today().isoformat()
+        self._entries = {today: self._entries.get(today, 0) + 1}
         self._save()
+
+    def daily_trades(self) -> int:
+        return self._entries.get(date.today().isoformat(), 0)
+
+    def win_rate(self) -> float | None:
+        if not self._closed:
+            return None
+        return sum(1 for t in self._closed if t["pnl"] > 0) / len(self._closed)
 
     def record_exit(self, pair: str, pnl_pct: float):
         conf = self._open.pop(pair, None)
