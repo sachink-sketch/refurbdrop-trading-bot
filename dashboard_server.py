@@ -155,6 +155,7 @@ def parse_state() -> dict:
             try:
                 a["entry"]   = float(pos["entry"].replace(",", ""))
                 a["current"] = float(pos["now"].replace(",", ""))
+                a["pnl"]     = pos["pnl"]
             except Exception:
                 pass
 
@@ -227,6 +228,7 @@ def parse_analysis(text: str) -> list[dict]:
             "tp_pct":    tp_pct,
             "entry":     None,
             "current":   None,
+            "pnl":       None,
         })
 
     return results
@@ -371,8 +373,10 @@ async function refresh(){
         const tgt=a.entry!=null?a.entry*(1+a.tp_pct/100):null;
         const stp=a.entry!=null?a.entry*(1-a.sl_pct/100):null;
         const factors=a.factors.map(f=>`<span class="a-factor">${f}</span>`).join('');
+        const pnlCls=a.pnl?(a.pnl.startsWith('+')?'pos':'neg'):'';
+        const pnlStr=a.pnl?`<span class="${pnlCls}" style="font-size:11px;font-weight:600;margin-left:6px">${a.pnl}</span>`:'';
         return `<div class="a-card ${cls}">
-          <div><span class="a-pair">${a.pair}</span><span class="a-price">${fmt(a.current)}</span></div>
+          <div><span class="a-pair">${a.pair}${pnlStr}</span><span class="a-price">${fmt(a.current)}</span></div>
           <div class="a-sigrow">
             <span class="tag ${tagC}">${a.action}</span>
             <span style="color:#8b949e;font-size:11px">${a.conf}%</span>
