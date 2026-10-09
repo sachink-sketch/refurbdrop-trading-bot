@@ -146,6 +146,17 @@ class CryptoBot:
 
         self._fg = get_fear_greed()
 
+        if crypto_config.HOLD_MODE:
+            try:
+                self._hold_cycle()
+            except Exception as e:
+                logger.error(f"Hold-mode guard error: {e}")
+            try:
+                self._print_summary()
+            except Exception as e:
+                logger.error(f"[BOT] Summary error: {e}")
+            return
+
         # 1. Fixed/ATR SL/TP check
         try:
             positions = self._unprotected(self._apply_entry_overrides(self.exchange.get_positions()))
@@ -229,6 +240,37 @@ class CryptoBot:
             self._print_summary()
         except Exception as e:
             logger.error(f"[BOT] Summary error: {e}")
+
+    def _hold_cycle(self):
+        """Hold & guard: refresh quotes and sell only on a big drop (vs real cost, or off the peak after a gain)."""
+        positions = self._apply_entry_overrides(self.exchange.get_positions())
+        for pair in positions:
+            ba = self.exchange.get_bid_ask(pair)
+            if ba:
+                self._quotes[pair] = ba
+        for pair, pos in self._unprotected(positions).items():
+            if pos.value_usdt < 5.0:
+                continue
+            exit_px = self._exit_value(pair, pos)
+            cost = self._cost_basis(pair, pos.avg_entry)
+            if not cost or not exit_px:
+                continue
+            meta = self._meta.setdefault(pair, {})
+            peak = max(meta.get("peak", exit_px), exit_px)
+            if peak != meta.get("peak"):
+                meta["peak"] = peak
+                self._save_meta()
+            loss = (exit_px - cost) / cost
+            reason = None
+            if loss <= -crypto_config.GUARD_DROP_PCT:
+                reason = f"{loss:+.1%} vs cost (limit -{crypto_config.GUARD_DROP_PCT:.0%})"
+            elif (peak >= cost * (1 + crypto_config.GUARD_PEAK_ARM_PCT)
+                  and exit_px <= peak * (1 - crypto_config.GUARD_PEAK_DROP_PCT)):
+                reason = f"{exit_px / peak - 1:+.1%} off peak ${peak:,.4f} (limit -{crypto_config.GUARD_PEAK_DROP_PCT:.0%})"
+            if reason:
+                logger.warning(f"GUARD EXIT {pair}: {reason}")
+                self._sell(pair, pos.qty, reason="GUARD")
+        logger.info("Hold & guard mode: no scanning, no new trades")
 
     def _get_higher_tf(self, pair: str) -> dict:
         cached = self._htf_cache.get(pair)
@@ -393,7 +435,7 @@ class CryptoBot:
                 )
                 self.analyst.record_outcome(pair, "SELL", cost, order.price, pnl_pct)
                 self.tracker.record_exit(pair, pnl_pct)
-                event_type = {"SL/TP": "STOP LOSS", "TRAIL": "TRAILING STOP", "TIME": "TIME EXIT"}.get(reason, "SELL")
+                event_type = {"SL/TP": "STOP LOSS", "TRAIL": "TRAILING STOP", "TIME": "TIME EXIT", "GUARD": "GUARD EXIT"}.get(reason, "SELL")
                 fb.push_async(fb.push_trade_event, event_type, pair, order.price, pnl_pct)
                 notify(f"{event_type} {pair} @ ${order.price:,.4f} ({pnl_pct:+.2%}, ${pnl_usd:+.2f})")
         except Exception as e:
@@ -432,7 +474,9 @@ class CryptoBot:
         )
         fb.push_async(fb.push_positions, positions, net_pnl, costs)
         fb.push_async(fb.push_equity, total)
-        fb.push_async(fb.push_market, self._fg, self._llm_paused())
+        hold = ({"drop": crypto_config.GUARD_DROP_PCT, "peak_drop": crypto_config.GUARD_PEAK_DROP_PCT,
+                 "peak_arm": crypto_config.GUARD_PEAK_ARM_PCT} if crypto_config.HOLD_MODE else None)
+        fb.push_async(fb.push_market, self._fg, self._llm_paused(), hold)
         fb.push_async(fb.push_accuracy, self.tracker.summary())
         if self._cycle_signals:
             fb.push_async(fb.push_signals, self._cycle_signals)

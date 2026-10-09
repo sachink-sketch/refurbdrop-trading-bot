@@ -50,6 +50,13 @@ class CryptoConfig:
     MAX_DAILY_LOSS_PCT: float = float(os.getenv("CRYPTO_MAX_DAILY_LOSS_PCT", "0.04"))# 4% daily loss cap
     MIN_CONFIDENCE: float    = float(os.getenv("CRYPTO_MIN_CONFIDENCE", "0.55"))     # 55% — catches trending momentum setups
 
+    # Hold & guard mode: no scanning/new trades/small stops (each exit costs ~1% spread on Robinhood).
+    # Positions are only sold on a big drop. Protected holdings (e.g. BTC) are never sold.
+    HOLD_MODE: bool          = os.getenv("CRYPTO_HOLD_MODE", "1") == "1"
+    GUARD_DROP_PCT: float    = float(os.getenv("CRYPTO_GUARD_DROP_PCT", "0.10"))       # sell if 10% below real cost
+    GUARD_PEAK_ARM_PCT: float = float(os.getenv("CRYPTO_GUARD_PEAK_ARM_PCT", "0.03"))  # once up 3%+ ...
+    GUARD_PEAK_DROP_PCT: float = float(os.getenv("CRYPTO_GUARD_PEAK_DROP_PCT", "0.12")) # ... sell if 12% off the peak
+
     # Spread guard: a round trip costs about one full bid/ask spread, so the target must clear it comfortably
     SPREAD_COST_MULT: float  = float(os.getenv("CRYPTO_SPREAD_COST_MULT", "3.0"))    # target >= 3x spread
     MAX_SPREAD_PCT: float    = float(os.getenv("CRYPTO_MAX_SPREAD_PCT", "0.006"))    # never enter above 0.6% spread

@@ -303,7 +303,7 @@ document.getElementById('sign-out-btn').addEventListener('click', () => {
 
 // ── DATA LISTENERS ──
 let unsubscribers = [];
-let maxTrades = 3, lastPosCount = 0, llmPaused = false;
+let maxTrades = 3, lastPosCount = 0, llmPaused = false, holdInfo = null;
 
 function startListening() {
   // Main status
@@ -372,6 +372,14 @@ function startListening() {
 
   function renderAnalysis() {
     const grid = document.getElementById('analysis-grid');
+    if (holdInfo) {
+      const pct = x => Math.round(x * 100);
+      grid.innerHTML = `<div style="grid-column:1/-1;background:#0f2a1a;border:1px solid var(--green);color:var(--text);border-radius:8px;padding:14px 16px;font-size:13px;line-height:1.6">
+        <b style="color:var(--green)">Hold &amp; guard mode</b> — no scanning and no new trades (Claude analysis is off, so no API cost).<br>
+        Each coin is held. It is sold only if it falls <b>${pct(holdInfo.drop)}%</b> below what you paid, or <b>${pct(holdInfo.peak_drop)}%</b> off its peak after gaining ${pct(holdInfo.peak_arm)}%+.
+        Protected long-term holdings (BTC) are never sold.</div>`;
+      return;
+    }
     const sigs = Object.values(_latestSigs);
     const banner = llmPaused
       ? '<div style="grid-column:1/-1;background:#2d1f0e;border:1px solid var(--yellow);color:var(--yellow);border-radius:8px;padding:10px 12px;font-size:12px">Claude analysis paused (API credits exhausted). Signals below are from the last scan. Open positions are still managed by stops.</div>'
@@ -500,6 +508,7 @@ function startListening() {
     el.textContent = `${m.fng_value} · ${m.fng_label}`;
     el.className = 'val ' + (m.fng_value < 35 ? 'red' : m.fng_value > 65 ? 'green' : '');
     llmPaused = !!m.llm_paused;
+    holdInfo = m.hold || null;
     renderAnalysis();
   });
 

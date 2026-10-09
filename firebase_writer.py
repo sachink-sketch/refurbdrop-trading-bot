@@ -130,10 +130,11 @@ def push_equity(total: float):
     _put(f"equity/{key}", {"t": datetime.now().strftime("%m/%d %H:%M"), "v": _safe(round(total, 2))})
 
 
-def push_market(fear_greed: dict, llm_paused: bool = False):
+def push_market(fear_greed: dict, llm_paused: bool = False, hold: Optional[dict] = None):
     _put("market", {
         "fng_value": fear_greed.get("value"), "fng_label": fear_greed.get("label"),
         "llm_paused": llm_paused,
+        "hold": hold,
     })
 
 
