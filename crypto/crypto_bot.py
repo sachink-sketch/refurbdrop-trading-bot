@@ -69,6 +69,8 @@ class CryptoBot:
         self._htf_cache: dict[str, tuple[float, dict]] = {}
         self._quotes: dict[str, tuple[float, float]] = {}   # pair -> (bid, ask) from the latest scan
         self._llm_down_until = 0.0   # Claude scan paused (credits exhausted) until this epoch time
+        self._last_research = 0.0
+        self._research_updated = ""
         self._trailing = TrailingStopManager(
             trail_pct       = crypto_config.TRAIL_PCT,
             take_profit_pct = crypto_config.TAKE_PROFIT_PCT,
@@ -151,6 +153,12 @@ class CryptoBot:
                 self._hold_cycle()
             except Exception as e:
                 logger.error(f"Hold-mode guard error: {e}")
+            if crypto_config.RESEARCH_MODE and not self._llm_paused() \
+                    and time.time() - self._last_research >= crypto_config.RESEARCH_EVERY_SECONDS:
+                try:
+                    self._research_scan()
+                except Exception as e:
+                    logger.error(f"Research scan error: {e}")
             try:
                 self._print_summary()
             except Exception as e:
@@ -272,6 +280,31 @@ class CryptoBot:
                 self._sell(pair, pos.qty, reason="GUARD")
         logger.info("Hold & guard mode: no scanning, no new trades")
 
+    def _research_scan(self):
+        """Ask Claude for a multi-day view of every watched coin. Analysis only: no orders are ever placed."""
+        positions = self._apply_entry_overrides(self.exchange.get_positions())
+        usdt = self.exchange.get_usdt_balance()
+        logger.info("Research scan: asking Claude for a multi-day view of each coin (no trades)")
+        done = 0
+        for pair in crypto_config.PAIRS:
+            if pair in crypto_config.EXCLUDED_PAIRS:
+                continue
+            try:
+                self._analyze_and_trade(pair, usdt, positions, research=True)
+                done += 1
+                time.sleep(0.5)
+            except anthropic.BadRequestError as e:
+                if "credit balance" in str(e).lower():
+                    self._llm_down_until = time.time() + _LLM_RETRY_SECONDS
+                    logger.warning("Claude API credits exhausted — research paused for 1h")
+                    break
+                logger.error(f"Research error on {pair}: {e}")
+            except Exception as e:
+                logger.error(f"Research error on {pair}: {e}")
+        self._last_research = time.time()   # always: a failing scan must not retry every cycle
+        if done:
+            self._research_updated = datetime.now().strftime("%H:%M")
+
     def _get_higher_tf(self, pair: str) -> dict:
         cached = self._htf_cache.get(pair)
         if cached and time.time() - cached[0] < _HTF_CACHE_SECONDS:
@@ -320,7 +353,7 @@ class CryptoBot:
             signal.reasoning = f"[{'; '.join(notes)}] {signal.reasoning}"
             logger.info(f"  {signal.pair} context: {'; '.join(notes)}")
 
-    def _analyze_and_trade(self, pair: str, usdt: float, positions: dict):
+    def _analyze_and_trade(self, pair: str, usdt: float, positions: dict, research: bool = False):
         # Skip pairs unsupported by the current exchange (e.g. BNB on Robinhood)
         if hasattr(self.exchange, "supports_pair") and not self.exchange.supports_pair(pair):
             return
@@ -331,30 +364,37 @@ class CryptoBot:
         ind = summarize_indicators(df)
         ind_1h = self._get_higher_tf(pair)
 
+        spread = None
+        ba = self.exchange.get_bid_ask(pair)
+        if ba:
+            self._quotes[pair] = ba
+            spread = (ba[1] - ba[0]) / ((ba[0] + ba[1]) / 2)
+
         signal = self.analyst.analyze(
             pair, ind, usdt,
             {p: {"qty": pos.qty, "entry": pos.avg_entry, "pnl_pct": pos.unrealized_pnl_pct}
              for p, pos in positions.items()},
             higher_tf=ind_1h,
             fear_greed=self._fg,
-            calibration=self.tracker.prompt_summary(),
+            calibration="" if research else self.tracker.prompt_summary(),
+            research=research,
+            spread_pct=spread,
         )
-        spread = None
-        ba = self.exchange.get_bid_ask(pair)
-        if ba:
-            self._quotes[pair] = ba
-            spread = (ba[1] - ba[0]) / ((ba[0] + ba[1]) / 2)
-        self._apply_context(signal, ind, ind_1h, spread)
+        if not research:
+            self._apply_context(signal, ind, ind_1h, spread)
 
         self._cycle_signals.append({
             "spread_pct": round(spread * 100, 3) if spread is not None else None,
             "pair":       pair,
             "action":     signal.action,
             "confidence": round(signal.confidence * 100),
-            "reason":     signal.reasoning[:120],
+            "reason":     signal.reasoning[:240],
             "sl_pct":     round(signal.stop_loss_pct * 100, 2),
             "tp_pct":     round(signal.take_profit_pct * 100, 2),
         })
+
+        if research:
+            return   # research mode never reaches the buy/sell code below
 
         if signal.action == "HOLD":
             return
@@ -475,7 +515,11 @@ class CryptoBot:
         fb.push_async(fb.push_positions, positions, net_pnl, costs)
         fb.push_async(fb.push_equity, total)
         hold = ({"drop": crypto_config.GUARD_DROP_PCT, "peak_drop": crypto_config.GUARD_PEAK_DROP_PCT,
-                 "peak_arm": crypto_config.GUARD_PEAK_ARM_PCT} if crypto_config.HOLD_MODE else None)
+                 "peak_arm": crypto_config.GUARD_PEAK_ARM_PCT,
+                 "research": bool(crypto_config.RESEARCH_MODE),
+                 "research_updated": self._research_updated,
+                 "research_every_min": crypto_config.RESEARCH_EVERY_SECONDS // 60}
+                if crypto_config.HOLD_MODE else None)
         fb.push_async(fb.push_market, self._fg, self._llm_paused(), hold)
         fb.push_async(fb.push_accuracy, self.tracker.summary())
         if self._cycle_signals:

@@ -59,6 +59,25 @@ Respond ONLY with valid JSON:
 }"""
 
 
+RESEARCH_SYSTEM_PROMPT = """You are a crypto research analyst helping a human decide what to hold, buy or trim over the next days to weeks. You do NOT place trades; the human decides.
+
+The human trades on Robinhood, where buying and then selling costs about 1.9% in spread. Short wiggles are worthless to them. Recommend BUY only when you see a credible path to a gain well above that cost (roughly 6%+). Recommend SELL only when the risk of a large drop is clear. Otherwise HOLD. If signals are mixed, say HOLD.
+
+Use the 1-hour trend and the 5-minute indicators for timing, the Fear & Greed index for sentiment, and whether the human already holds the coin. Be honest about uncertainty. "confidence" is how sure you are the call is right (0.0-1.0).
+
+Respond ONLY with valid JSON:
+{
+  "action": "BUY" | "SELL" | "HOLD",
+  "confidence": <float 0.0-1.0>,
+  "reasoning": "<2-3 plain sentences: your view, the main risk, and what would change your mind>",
+  "usdt_amount_pct": 0.0,
+  "stop_loss_pct": <swing-trade stop as a fraction, e.g. 0.05>,
+  "take_profit_pct": <swing-trade target as a fraction, e.g. 0.10>,
+  "risk_level": "LOW" | "MEDIUM" | "HIGH",
+  "key_factors": ["factor1", "factor2", "factor3"]
+}"""
+
+
 class ClaudeCryptoAnalyst:
     def __init__(self):
         self.client = anthropic.Anthropic(api_key=crypto_config.ANTHROPIC_API_KEY)
@@ -80,15 +99,18 @@ class ClaudeCryptoAnalyst:
         higher_tf: dict | None = None,
         fear_greed: dict | None = None,
         calibration: str = "",
+        research: bool = False,
+        spread_pct: float | None = None,
     ) -> CryptoSignal:
 
         prompt = self._build_prompt(
-            pair, indicators, portfolio_usdt, open_positions, higher_tf, fear_greed, calibration
+            pair, indicators, portfolio_usdt, open_positions, higher_tf, fear_greed, calibration,
+            research, spread_pct,
         )
         response = self.client.messages.create(
             model=self.model,
             max_tokens=4096,
-            system=SYSTEM_PROMPT,
+            system=RESEARCH_SYSTEM_PROMPT if research else SYSTEM_PROMPT,
             messages=[{"role": "user", "content": prompt}],
         )
         raw = next(b.text for b in response.content if hasattr(b, "text")).strip()
@@ -131,6 +153,7 @@ class ClaudeCryptoAnalyst:
     def _build_prompt(
         self, pair: str, ind: dict, usdt: float, positions: dict,
         higher_tf: dict | None = None, fear_greed: dict | None = None, calibration: str = "",
+        research: bool = False, spread_pct: float | None = None,
     ) -> str:
         context = ""
         if higher_tf:
@@ -176,6 +199,18 @@ class ClaudeCryptoAnalyst:
         if ind.get("bb_pct", 0.5) > 0.85: factors.append("Price near upper Bollinger Band — momentum or reversal zone")
         if ind.get("obv_rising"): factors.append("OBV rising — volume confirms move")
 
+        if research:
+            cost = f"{spread_pct:.2%}" if spread_pct is not None else "about 1.9%"
+            tail = (
+                f"RESEARCH TASK: give a multi-day view for {pair}. Current round-trip spread cost: {cost}. "
+                f"The reader decides; you do not trade.\n\nReturn JSON only."
+            )
+        else:
+            tail = (
+                f"MIN CONFIDENCE NEEDED: {crypto_config.MIN_CONFIDENCE}\n"
+                f"Target R/R: 1:2 (stop_loss * 2 = take_profit)\n\nReturn JSON only."
+            )
+
         return f"""Micro-trade analysis for {pair}
 
 CURRENT PRICE: ${ind.get('price', 0):,.6f}
@@ -197,7 +232,4 @@ SIGNALS DETECTED: {factors if factors else ['No strong signals']}{context}
 
 PORTFOLIO: ${usdt:.2f} USDT available | {len(positions)} open positions{pos_block}{history}
 
-MIN CONFIDENCE NEEDED: {crypto_config.MIN_CONFIDENCE}
-Target R/R: 1:2 (stop_loss * 2 = take_profit)
-
-Return JSON only."""
+{tail}"""

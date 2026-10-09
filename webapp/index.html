@@ -372,7 +372,8 @@ function startListening() {
 
   function renderAnalysis() {
     const grid = document.getElementById('analysis-grid');
-    if (holdInfo) {
+    const researchMode = !!(holdInfo && holdInfo.research);
+    if (holdInfo && !researchMode) {
       const pct = x => Math.round(x * 100);
       grid.innerHTML = `<div style="grid-column:1/-1;background:#0f2a1a;border:1px solid var(--green);color:var(--text);border-radius:8px;padding:14px 16px;font-size:13px;line-height:1.6">
         <b style="color:var(--green)">Hold &amp; guard mode</b> — no scanning and no new trades (Claude analysis is off, so no API cost).<br>
@@ -381,9 +382,13 @@ function startListening() {
       return;
     }
     const sigs = Object.values(_latestSigs);
-    const banner = llmPaused
-      ? '<div style="grid-column:1/-1;background:#2d1f0e;border:1px solid var(--yellow);color:var(--yellow);border-radius:8px;padding:10px 12px;font-size:12px">Claude analysis paused (API credits exhausted). Signals below are from the last scan. Open positions are still managed by stops.</div>'
+    const researchBanner = researchMode
+      ? `<div style="grid-column:1/-1;background:#0f2a1a;border:1px solid var(--green);color:var(--text);border-radius:8px;padding:12px 14px;font-size:12px;line-height:1.6">
+          <b style="color:var(--green)">Research mode</b> — ideas only, no trades are placed. Claude's multi-day view of each coin, refreshed about every ${holdInfo.research_every_min || 10} min${holdInfo.research_updated ? ' (last ' + holdInfo.research_updated + ')' : ''}. Buying and selling together costs about 1.9% in spread, so only moves well above that matter. Your coins are still guarded: sold only on a ${Math.round(holdInfo.drop * 100)}% drop below cost or ${Math.round(holdInfo.peak_drop * 100)}% off a peak. BTC is never sold.</div>`
       : '';
+    const banner = researchBanner || (llmPaused
+      ?'<div style="grid-column:1/-1;background:#2d1f0e;border:1px solid var(--yellow);color:var(--yellow);border-radius:8px;padding:10px 12px;font-size:12px">Claude analysis paused (API credits exhausted). Signals below are from the last scan. Open positions are still managed by stops.</div>'
+      : '');
     if (sigs.length === 0) {
       grid.innerHTML = banner + '<div style="color:var(--muted);text-align:center;padding:20px;font-size:13px;grid-column:1/-1">Waiting for next cycle...</div>';
       return;
@@ -413,7 +418,14 @@ function startListening() {
 
       // Entry / Target / Stop prices
       let priceHtml = '';
-      if (pos && pos.entry) {
+      if (researchMode) {
+        const fmt = v => Number(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:4});
+        priceHtml = `<div class="a-prices">
+          ${pos && pos.entry ? `<span>You paid <b>$${fmt(pos.entry)}</b></span>` : ''}
+          <span style="color:var(--green)">Target <b>+${s.tp_pct}%</b></span>
+          <span style="color:var(--red)">Stop <b>-${s.sl_pct}%</b></span>
+        </div>`;
+      } else if (pos && pos.entry) {
         const entry  = Number(pos.entry);
         const tp_pct = s.tp_pct || 2.0;
         const sl_pct = s.sl_pct || 0.8;
@@ -436,7 +448,7 @@ function startListening() {
         priceHtml += `<div class="a-prices"><span style="${wide ? 'color:var(--red)' : ''}">Spread <b>${s.spread_pct.toFixed(3)}%</b></span></div>`;
       }
 
-      const reason = (s.reason || '').substring(0, 120);
+      const reason = (s.reason || '').substring(0, 240);
       return `<div class="a-card ${cardCls}">
         <div>
           <span class="a-pair">${s.pair}</span>${pnlHtml}${curHtml}

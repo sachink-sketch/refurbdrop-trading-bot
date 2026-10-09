@@ -60,6 +60,10 @@ class CryptoConfig:
     GUARD_PEAK_ARM_PCT: float = float(os.getenv("CRYPTO_GUARD_PEAK_ARM_PCT", "0.03"))  # once up 3%+ ...
     GUARD_PEAK_DROP_PCT: float = float(os.getenv("CRYPTO_GUARD_PEAK_DROP_PCT", "0.12")) # ... sell if 12% off the peak
 
+    # Research mode (only with HOLD_MODE): Claude writes a multi-day view per coin on the site. Never trades.
+    RESEARCH_MODE: bool      = os.getenv("CRYPTO_RESEARCH_MODE", "1") == "1"
+    RESEARCH_EVERY_SECONDS: int = int(os.getenv("CRYPTO_RESEARCH_EVERY_SECONDS", "600"))
+
     # Spread guard: a round trip costs about one full bid/ask spread, so the target must clear it comfortably
     SPREAD_COST_MULT: float  = float(os.getenv("CRYPTO_SPREAD_COST_MULT", "3.0"))    # target >= 3x spread
     MAX_SPREAD_PCT: float    = float(os.getenv("CRYPTO_MAX_SPREAD_PCT", "0.006"))    # never enter above 0.6% spread
