@@ -25,6 +25,7 @@ class CryptoBot:
         self._cycle   = 0
         self._entry_times: dict[str, datetime] = {}
         self._entry_prices: dict[str, float] = self._load_entry_prices()
+        self._cycle_signals: list[dict] = []
         self._trailing = TrailingStopManager(
             trail_pct       = crypto_config.TRAIL_PCT,
             take_profit_pct = crypto_config.TAKE_PROFIT_PCT,
@@ -129,6 +130,15 @@ class CryptoBot:
             for p, pos in positions.items()
         })
 
+        self._cycle_signals.append({
+            "pair":       pair,
+            "action":     signal.action,
+            "confidence": round(signal.confidence * 100),
+            "reason":     signal.reasoning[:120],
+            "sl_pct":     round(signal.stop_loss_pct * 100, 1),
+            "tp_pct":     round(signal.take_profit_pct * 100, 1),
+        })
+
         if signal.action == "HOLD":
             return
 
@@ -194,6 +204,9 @@ class CryptoBot:
         # Push to Firebase (non-blocking)
         fb.push_async(fb.push_status, total, pnl_pct, pnl_usd, self._cycle)
         fb.push_async(fb.push_positions, positions)
+        if self._cycle_signals:
+            fb.push_async(fb.push_signals, self._cycle_signals)
+            self._cycle_signals = []
 
         trail_status = self._trailing.status()
         if positions:

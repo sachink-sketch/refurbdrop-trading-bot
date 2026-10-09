@@ -106,6 +106,23 @@
   .timer-ring-bg { fill: none; stroke: var(--border); stroke-width: 3; }
   .timer-ring-arc { fill: none; stroke-width: 3; stroke-linecap: round; transition: stroke-dashoffset .9s linear; }
   @media(max-width:500px){ .timer-row{grid-template-columns:1fr} }
+
+  /* Analysis cards */
+  .analysis-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px,1fr)); gap: 12px; margin-top: 8px; }
+  .a-card { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 14px; border-left: 3px solid var(--border); }
+  .a-card.buy { border-left-color: var(--green); }
+  .a-card.sell { border-left-color: var(--red); }
+  .a-card.hold-low { opacity: .5; }
+  .a-pair { font-size: 14px; font-weight: 700; font-family: 'Inter', sans-serif; }
+  .a-pnl { font-size: 12px; font-weight: 600; margin-left: 6px; font-family: 'JetBrains Mono', monospace; }
+  .a-price-cur { font-size: 12px; color: var(--muted); float: right; margin-top: 2px; font-family: 'JetBrains Mono', monospace; }
+  .a-sigrow { display: flex; align-items: center; gap: 8px; margin: 8px 0 6px; clear: both; }
+  .a-conf-track { flex: 1; background: #21262d; border-radius: 3px; height: 6px; overflow: hidden; }
+  .a-conf-fill { height: 6px; border-radius: 3px; }
+  .a-prices { display: flex; flex-wrap: wrap; gap: 5px; margin: 7px 0; font-size: 11px; }
+  .a-prices span { background: #21262d; border-radius: 4px; padding: 3px 7px; color: var(--muted); font-family: 'JetBrains Mono', monospace; }
+  .a-prices span b { color: var(--text); }
+  .a-reason { font-size: 11px; color: var(--muted); line-height: 1.5; margin-top: 8px; font-family: 'Inter', sans-serif; }
 </style>
 </head>
 <body>
@@ -193,11 +210,8 @@
   </div>
 
   <div class="section">
-    <div class="section-title"><span class="live-dot" style="background:var(--muted)"></span> Signal Feed — Latest Cycle</div>
-    <table>
-      <thead><tr><th>Pair</th><th>Signal</th><th>Confidence</th><th>Reason</th></tr></thead>
-      <tbody id="sig-body"><tr class="empty-row"><td colspan="4">Waiting for cycle...</td></tr></tbody>
-    </table>
+    <div class="section-title"><span class="live-dot" style="background:var(--purple)"></span> Claude's Analysis — Latest Cycle</div>
+    <div class="analysis-grid" id="analysis-grid"><div style="color:var(--muted);text-align:center;padding:20px;font-size:13px;grid-column:1/-1">Waiting for next cycle...</div></div>
   </div>
 </div>
 
@@ -301,9 +315,11 @@ function startListening() {
     }
   });
 
-  // Positions
+  // Positions (table + analysis cards share this listener)
+  let _latestPos = {};
   onValue(ref(db, 'positions'), snap => {
     const positions = snap.val() || {};
+    _latestPos = positions;
     const tbody = document.getElementById('pos-body');
     const posArr = Object.values(positions);
     document.getElementById('c-positions').textContent =
@@ -311,43 +327,95 @@ function startListening() {
 
     if (posArr.length === 0) {
       tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No open positions — scanning...</td></tr>';
-      return;
+    } else {
+      tbody.innerHTML = posArr.map(p => {
+        const pnl = p.pnl_pct || 0;
+        const cls = pnl >= 0 ? 'green' : 'red';
+        const sign = pnl >= 0 ? '+' : '';
+        return `<tr>
+          <td><strong>${p.pair}</strong></td>
+          <td>$${(p.entry || 0).toLocaleString('en-US', {minimumFractionDigits:2,maximumFractionDigits:2})}</td>
+          <td>$${(p.current || 0).toLocaleString('en-US', {minimumFractionDigits:2,maximumFractionDigits:4})}</td>
+          <td class="${cls}">${sign}${(pnl*100).toFixed(2)}%</td>
+          <td>${p.mins_held != null ? p.mins_held + 'm' : '--'}</td>
+        </tr>`;
+      }).join('');
     }
-    tbody.innerHTML = posArr.map(p => {
-      const pnl = p.pnl_pct || 0;
-      const cls = pnl >= 0 ? 'green' : 'red';
-      const sign = pnl >= 0 ? '+' : '';
-      return `<tr>
-        <td><strong>${p.pair}</strong></td>
-        <td>$${(p.entry || 0).toLocaleString('en-US', {minimumFractionDigits:2,maximumFractionDigits:2})}</td>
-        <td>$${(p.current || 0).toLocaleString('en-US', {minimumFractionDigits:2,maximumFractionDigits:4})}</td>
-        <td class="${cls}">${sign}${(pnl*100).toFixed(2)}%</td>
-        <td>${p.mins_held != null ? p.mins_held + 'm' : '--'}</td>
-      </tr>`;
-    }).join('');
+    renderAnalysis();
   });
 
-  // Signals (last cycle)
-  onValue(ref(db, 'signals'), snap => {
-    const sigs = snap.val() || {};
-    const arr = Object.values(sigs);
-    const tbody = document.getElementById('sig-body');
-    if (arr.length === 0) { tbody.innerHTML = '<tr class="empty-row"><td colspan="4">Waiting...</td></tr>'; return; }
+  // Analysis cards (signals cross-referenced with positions)
+  let _latestSigs = {};
+
+  function renderAnalysis() {
+    const grid = document.getElementById('analysis-grid');
+    const sigs = Object.values(_latestSigs);
+    if (sigs.length === 0) {
+      grid.innerHTML = '<div style="color:var(--muted);text-align:center;padding:20px;font-size:13px;grid-column:1/-1">Waiting for next cycle...</div>';
+      return;
+    }
     const tagMap = { BUY: 'tag-buy', SELL: 'tag-sell', HOLD: 'tag-hold' };
-    tbody.innerHTML = arr.map(s => {
-      const tag = tagMap[s.action] || 'tag-hold';
-      const barW = Math.round((s.confidence || 0) * 1.4);
-      const barC = s.action==='BUY' ? '#3fb950' : s.action==='SELL' ? '#f85149' : '#30363d';
-      const reason = (s.reason || '').substring(0, 60);
-      return `<tr>
-        <td><strong>${s.pair}</strong></td>
-        <td><span class="tag ${tag}">${s.action}</span></td>
-        <td>${s.confidence}%
-          <span class="conf-bar" style="width:${barW}px;background:${barC}"></span>
-        </td>
-        <td style="color:var(--muted);font-family:'Inter',sans-serif;font-size:12px">${reason}</td>
-      </tr>`;
+    const barClr = { BUY: 'var(--green)', SELL: 'var(--red)', HOLD: '#30363d' };
+    grid.innerHTML = sigs.map(s => {
+      const action = s.action || 'HOLD';
+      const conf   = s.confidence || 0;
+      const pairKey = (s.pair || '').replace('/', '-');
+      const pos    = _latestPos[pairKey] || _latestPos[s.pair] || null;
+      const cardCls = action === 'BUY' ? 'buy' : action === 'SELL' ? 'sell' : conf < 40 ? 'hold-low' : '';
+
+      // P&L badge
+      let pnlHtml = '';
+      if (pos && pos.pnl_pct != null) {
+        const pnl = pos.pnl_pct * 100;
+        const pnlCls = pnl >= 0 ? 'green' : 'red';
+        pnlHtml = `<span class="a-pnl ${pnlCls}">${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%</span>`;
+      }
+
+      // Current price
+      let curHtml = '';
+      if (pos && pos.current) {
+        curHtml = `<span class="a-price-cur">$${Number(pos.current).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:4})}</span>`;
+      }
+
+      // Entry / Target / Stop prices
+      let priceHtml = '';
+      if (pos && pos.entry) {
+        const entry  = Number(pos.entry);
+        const tp_pct = s.tp_pct || 2.0;
+        const sl_pct = s.sl_pct || 0.8;
+        const target = entry * (1 + tp_pct / 100);
+        const stop   = entry * (1 - sl_pct / 100);
+        priceHtml = `<div class="a-prices">
+          <span>Entry <b>$${entry.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:4})}</b></span>
+          <span style="color:var(--green)">TP <b>$${target.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:4})}</b></span>
+          <span style="color:var(--red)">SL <b>$${stop.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:4})}</b></span>
+        </div>`;
+      } else if (s.tp_pct || s.sl_pct) {
+        priceHtml = `<div class="a-prices">
+          <span>TP <b>+${s.tp_pct || 2.0}%</b></span>
+          <span>SL <b>-${s.sl_pct || 0.8}%</b></span>
+        </div>`;
+      }
+
+      const reason = (s.reason || '').substring(0, 120);
+      return `<div class="a-card ${cardCls}">
+        <div>
+          <span class="a-pair">${s.pair}</span>${pnlHtml}${curHtml}
+        </div>
+        <div class="a-sigrow">
+          <span class="tag ${tagMap[action] || 'tag-hold'}">${action}</span>
+          <span style="font-size:12px;color:var(--muted);font-family:'JetBrains Mono',monospace">${conf}%</span>
+          <div class="a-conf-track"><div class="a-conf-fill" style="width:${conf}%;background:${barClr[action] || '#30363d'}"></div></div>
+        </div>
+        ${priceHtml}
+        <div class="a-reason">${reason}</div>
+      </div>`;
     }).join('');
+  }
+
+  onValue(ref(db, 'signals'), snap => {
+    _latestSigs = snap.val() || {};
+    renderAnalysis();
   });
 
   // ── BOT COUNTDOWN TIMERS ──
