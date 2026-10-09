@@ -35,6 +35,7 @@ class CryptoOrder:
     cost_usdt: float
     status: str
     paper: bool = False
+    mark_price: float = 0.0   # mid-market price at submission; price is the real fill
 
 
 class BaseCryptoExchange(ABC):
@@ -46,8 +47,8 @@ class BaseCryptoExchange(ABC):
     @abstractmethod
     def get_price(self, pair: str) -> float: ...
 
-    def get_spread_pct(self, pair: str) -> float | None:
-        """Bid/ask spread as a fraction of mid price, or None if the exchange can't tell."""
+    def get_bid_ask(self, pair: str) -> tuple[float, float] | None:
+        """(bid, ask) or None if the exchange can't tell."""
         return None
 
     @abstractmethod

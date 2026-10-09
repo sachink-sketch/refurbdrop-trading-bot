@@ -86,16 +86,30 @@ class RobinhoodCryptoExchange(BaseCryptoExchange):
         quote = _retry(lambda: self._rh.crypto.get_crypto_quote(sym))
         return float(quote.get("mark_price") or quote.get("ask_price") or 0)
 
-    def get_spread_pct(self, pair: str) -> float | None:
+    def get_bid_ask(self, pair: str) -> tuple[float, float] | None:
         try:
             quote = _retry(lambda: self._rh.crypto.get_crypto_quote(_symbol(pair)))
             bid, ask = float(quote.get("bid_price") or 0), float(quote.get("ask_price") or 0)
             if bid <= 0 or ask <= 0 or ask < bid:
                 return None
-            return (ask - bid) / ((ask + bid) / 2)
+            return bid, ask
         except Exception as e:
-            logger.debug(f"[ROBINHOOD CRYPTO] spread unavailable for {pair}: {e}")
+            logger.debug(f"[ROBINHOOD CRYPTO] bid/ask unavailable for {pair}: {e}")
             return None
+
+    def _fill_price(self, order_id: str, fallback: float) -> float:
+        """Real average fill price. The order response right after placement has none, so poll for it."""
+        for _ in range(8):
+            try:
+                info = self._rh.get_crypto_order_info(order_id) or {}
+                avg = info.get("average_price")
+                if info.get("state") == "filled" and avg:
+                    return float(avg)
+            except Exception as e:
+                logger.debug(f"[ROBINHOOD CRYPTO] fill lookup failed: {e}")
+            time.sleep(1)
+        logger.warning(f"[ROBINHOOD CRYPTO] fill for order {order_id} unconfirmed — using quote ${fallback:,.4f}")
+        return fallback
 
     def get_usdt_balance(self) -> float:
         """Returns USD buying power available in the Robinhood account."""
@@ -142,13 +156,19 @@ class RobinhoodCryptoExchange(BaseCryptoExchange):
         order = self._rh.order_buy_crypto_by_price(sym, usdt_amount)
         if not order or order.get("detail"):
             raise RuntimeError(f"Robinhood buy failed: {order}")
-        filled_price = float(order.get("average_price") or price)
+        ba = self.get_bid_ask(pair)
+        filled_price = float(order.get("average_price") or 0) or self._fill_price(
+            order.get("id", ""), ba[1] if ba else price
+        )
         filled_qty   = float(order.get("quantity") or 0)
         if filled_qty == 0:
             filled_qty = float(order.get("rounded_executed_notional") or usdt_amount) / max(filled_price, 1e-8)
-        logger.info(f"[LIVE ROBINHOOD] BUY {filled_qty:.6f} {sym} @ ${filled_price:,.4f} (${usdt_amount:.2f})")
-        time.sleep(1)
-        return CryptoOrder(order.get("id", "rh"), pair, "BUY", filled_qty, filled_price, usdt_amount, "closed")
+        logger.info(
+            f"[LIVE ROBINHOOD] BUY {filled_qty:.6f} {sym} @ ${filled_price:,.4f} "
+            f"(${usdt_amount:.2f}, mark ${price:,.4f})"
+        )
+        return CryptoOrder(order.get("id", "rh"), pair, "BUY", filled_qty, filled_price, usdt_amount, "closed",
+                           mark_price=price)
 
     def sell_market(self, pair: str, qty: float) -> CryptoOrder:
         sym = _symbol(pair)
@@ -161,8 +181,14 @@ class RobinhoodCryptoExchange(BaseCryptoExchange):
             order = self._rh.order_sell_crypto_by_price(sym, proceeds)
         if not order or order.get("detail"):
             raise RuntimeError(f"Robinhood sell failed: {order}")
-        filled_price = float(order.get("average_price") or price)
+        ba = self.get_bid_ask(pair)
+        filled_price = float(order.get("average_price") or 0) or self._fill_price(
+            order.get("id", ""), ba[0] if ba else price
+        )
         proceeds = filled_price * qty
-        logger.info(f"[LIVE ROBINHOOD] SELL {qty:.6f} {sym} @ ${filled_price:,.4f} (${proceeds:.2f})")
-        time.sleep(1)
-        return CryptoOrder(order.get("id", "rh"), pair, "SELL", qty, filled_price, proceeds, "closed")
+        logger.info(
+            f"[LIVE ROBINHOOD] SELL {qty:.6f} {sym} @ ${filled_price:,.4f} "
+            f"(${proceeds:.2f}, mark ${price:,.4f})"
+        )
+        return CryptoOrder(order.get("id", "rh"), pair, "SELL", qty, filled_price, proceeds, "closed",
+                           mark_price=price)

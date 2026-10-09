@@ -65,6 +65,7 @@ class CryptoBot:
         self._cycle_signals: list[dict] = []
         self._fg: dict = {"value": 50, "label": "Neutral"}
         self._htf_cache: dict[str, tuple[float, dict]] = {}
+        self._quotes: dict[str, tuple[float, float]] = {}   # pair -> (bid, ask) from the latest scan
         self._trailing = TrailingStopManager(
             trail_pct       = crypto_config.TRAIL_PCT,
             take_profit_pct = crypto_config.TAKE_PROFIT_PCT,
@@ -83,11 +84,25 @@ class CryptoBot:
     def _save_meta(self):
         _save_json(_META_FILE, self._meta)
 
+    def _cost_basis(self, pair: str, avg_entry: float) -> float:
+        """What we really paid: the real buy fill if known, else the tracked entry (legacy holdings)."""
+        return self._meta.get(pair, {}).get("fill") or avg_entry
+
+    def _exit_value(self, pair: str, pos) -> float:
+        """Price we'd actually get selling now: the bid, falling back to the mark."""
+        q = self._quotes.get(pair)
+        return q[0] if q else pos.current_price
+
+    def _is_protected(self, pair: str) -> bool:
+        """Long-term holdings the bot must never auto-sell (set "protected": true in position_meta.json)."""
+        return bool(self._meta.get(pair, {}).get("protected"))
+
+    def _unprotected(self, positions: dict) -> dict:
+        return {p: pos for p, pos in positions.items() if not self._is_protected(p)}
+
     def _levels(self, pair: str) -> tuple[float, float]:
-        m = self._meta.get(pair)
-        if m:
-            return m["sl"], m["tp"]
-        return crypto_config.STOP_LOSS_PCT, crypto_config.TAKE_PROFIT_PCT
+        m = self._meta.get(pair, {})
+        return m.get("sl", crypto_config.STOP_LOSS_PCT), m.get("tp", crypto_config.TAKE_PROFIT_PCT)
 
     def _apply_entry_overrides(self, positions: dict) -> dict:
         """Patch avg_entry from our tracked prices — more reliable than Robinhood cost_bases.
@@ -128,7 +143,7 @@ class CryptoBot:
 
         # 1. Fixed/ATR SL/TP check
         try:
-            positions = self._apply_entry_overrides(self.exchange.get_positions())
+            positions = self._unprotected(self._apply_entry_overrides(self.exchange.get_positions()))
             levels = {p: self._levels(p) for p in positions}
             for pair, qty in self.risk.check_sl_tp(positions, levels):
                 self._sell(pair, qty, reason="SL/TP")
@@ -137,7 +152,7 @@ class CryptoBot:
 
         # 2. Trailing stop check (also re-arms stops for positions that survived a restart)
         try:
-            positions = self._apply_entry_overrides(self.exchange.get_positions())
+            positions = self._unprotected(self._apply_entry_overrides(self.exchange.get_positions()))
             for pair, pos in positions.items():
                 if pos.value_usdt >= 5.0 and not self._trailing.is_registered(pair):
                     sl, tp = self._levels(pair)
@@ -152,7 +167,7 @@ class CryptoBot:
 
         # 2b. Partial profit: bank half at 50% of the target, let the rest ride the trailing stop
         try:
-            positions = self._apply_entry_overrides(self.exchange.get_positions())
+            positions = self._unprotected(self._apply_entry_overrides(self.exchange.get_positions()))
             for pair, pos in positions.items():
                 _, tp = self._levels(pair)
                 done = self._meta.get(pair, {}).get("partial_done", False)
@@ -262,7 +277,11 @@ class CryptoBot:
             fear_greed=self._fg,
             calibration=self.tracker.prompt_summary(),
         )
-        spread = self.exchange.get_spread_pct(pair)
+        spread = None
+        ba = self.exchange.get_bid_ask(pair)
+        if ba:
+            self._quotes[pair] = ba
+            spread = (ba[1] - ba[0]) / ((ba[0] + ba[1]) / 2)
         self._apply_context(signal, ind, ind_1h, spread)
 
         self._cycle_signals.append({
@@ -278,7 +297,7 @@ class CryptoBot:
         if signal.action == "HOLD":
             return
 
-        ok, reason = self.risk.check(signal, positions)
+        ok, reason = self.risk.check(signal, self._unprotected(positions))
         if not ok:
             logger.debug(f"{pair}: blocked -- {reason}")
             return
@@ -293,17 +312,20 @@ class CryptoBot:
     def _buy(self, pair: str, signal=None):
         try:
             order = self.exchange.buy_market(pair, signal.usdt_amount)
+            # Stops/trailing watch the mark price, so they key off the mark at entry;
+            # "fill" is what we really paid and drives all reported P&L.
+            trigger_entry = order.mark_price or order.price
             self._entry_times[pair] = datetime.now()
-            self._entry_prices[pair] = order.price
+            self._entry_prices[pair] = trigger_entry
             self._save_entry_prices()
             sl, tp = signal.stop_loss_pct, signal.take_profit_pct
-            self._meta[pair] = {"sl": sl, "tp": tp, "partial_done": False}
+            self._meta[pair] = {"sl": sl, "tp": tp, "partial_done": False, "fill": order.price}
             self._save_meta()
-            self._trailing.register(pair, order.price, max(sl * 0.45, 0.0025), tp, sl)
+            self._trailing.register(pair, trigger_entry, max(sl * 0.45, 0.0025), tp, sl)
             self.tracker.record_entry(pair, signal.confidence)
             logger.info(
                 f"  Factors: {', '.join(signal.key_factors[:3])}\n"
-                f"  SL: {sl:.1%}  TP: {tp:.1%}  (ATR-scaled)"
+                f"  SL: {sl:.1%}  TP: {tp:.1%}  (ATR-scaled)  fill ${order.price:,.4f} vs mark ${trigger_entry:,.4f}"
             )
             fb.push_async(fb.push_trade_event, "BUY", pair, order.price)
             notify(f"BUY {pair} @ ${order.price:,.4f} | conf {signal.confidence:.0%} | SL {sl:.2%} TP {tp:.2%}")
@@ -311,23 +333,30 @@ class CryptoBot:
             logger.error(f"BUY {pair} failed: {e}")
 
     def _sell_partial(self, pair: str, pos):
+        if self._is_protected(pair):
+            return
         try:
             qty = pos.qty * 0.5
             order = self.exchange.sell_market(pair, qty)
+            cost = self._cost_basis(pair, pos.avg_entry)
             self._meta.setdefault(pair, {}).update(partial_done=True)
             self._save_meta()
-            pnl_pct = (order.price - pos.avg_entry) / pos.avg_entry if pos.avg_entry else 0
-            logger.info(f"  PARTIAL TP {pair}: sold half at {pnl_pct:+.2%}, rest rides trailing stop")
+            pnl_pct = (order.price - cost) / cost if cost else 0
+            logger.info(f"  PARTIAL TP {pair}: sold half at {pnl_pct:+.2%} (real fill), rest rides trailing stop")
             fb.push_async(fb.push_trade_event, "PARTIAL TP", pair, order.price, pnl_pct)
             notify(f"PARTIAL TP {pair}: sold half @ ${order.price:,.4f} ({pnl_pct:+.2%})")
         except Exception as e:
             logger.error(f"PARTIAL sell {pair} failed: {e}")
 
     def _sell(self, pair: str, qty: float, signal=None, reason: str = ""):
+        if self._is_protected(pair):
+            logger.warning(f"SELL {pair} skipped: protected long-term holding")
+            return
         try:
             positions = self._apply_entry_overrides(self.exchange.get_positions())
             pos = positions.get(pair)
             order = self.exchange.sell_market(pair, qty)
+            cost = self._cost_basis(pair, pos.avg_entry) if pos else 0
             self._entry_times.pop(pair, None)
             self._entry_prices.pop(pair, None)
             self._save_entry_prices()
@@ -335,14 +364,18 @@ class CryptoBot:
             self._save_meta()
             self._trailing.remove(pair)
             if pos:
-                pnl_pct = (order.price - pos.avg_entry) / pos.avg_entry if pos.avg_entry else 0
+                pnl_pct = (order.price - cost) / cost if cost else 0
+                pnl_usd = (order.price - cost) * qty
                 tag = f"[{reason}]" if reason else ""
-                logger.info(f"  CLOSED {tag} {pair}: {pnl_pct:+.2%} (${pnl_pct * pos.value_usdt:+.2f})")
-                self.analyst.record_outcome(pair, "SELL", pos.avg_entry, order.price, pnl_pct)
+                logger.info(
+                    f"  CLOSED {tag} {pair}: {pnl_pct:+.2%} (${pnl_usd:+.2f}) "
+                    f"real fill ${order.price:,.4f} vs cost ${cost:,.4f}"
+                )
+                self.analyst.record_outcome(pair, "SELL", cost, order.price, pnl_pct)
                 self.tracker.record_exit(pair, pnl_pct)
                 event_type = {"SL/TP": "STOP LOSS", "TRAIL": "TRAILING STOP", "TIME": "TIME EXIT"}.get(reason, "SELL")
                 fb.push_async(fb.push_trade_event, event_type, pair, order.price, pnl_pct)
-                notify(f"{event_type} {pair} @ ${order.price:,.4f} ({pnl_pct:+.2%}, ${pnl_pct * pos.value_usdt:+.2f})")
+                notify(f"{event_type} {pair} @ ${order.price:,.4f} ({pnl_pct:+.2%}, ${pnl_usd:+.2f})")
         except Exception as e:
             logger.error(f"SELL {pair} failed: {e}")
 
@@ -352,6 +385,18 @@ class CryptoBot:
         positions = self._apply_entry_overrides(self.exchange.get_positions())
 
         logger.info(f"\nPORTFOLIO  USDT: ${usdt:,.2f}  |  Total: ${total:,.2f}")
+        # Mark value overstates what we could cash out; use the bid-based liquidation value for P&L.
+        net_pnl = {}
+        liq_positions = 0.0
+        for pair, pos in positions.items():
+            exit_px = self._exit_value(pair, pos)
+            liq_positions += pos.qty * exit_px
+            cost = self._cost_basis(pair, pos.avg_entry)
+            if cost:
+                net_pnl[pair] = (exit_px - cost) / cost
+        liquidation = usdt + liq_positions
+        logger.info(f"LIQUIDATION VALUE (at bid): ${liquidation:,.2f}  (spread haircut ${total - liquidation:,.2f})")
+        total = liquidation
         pnl_pct, pnl_usd = 0.0, 0.0
         base = getattr(self.exchange, "_starting_usdt", None) or self._daily_baseline(total)
         if base:
@@ -364,7 +409,7 @@ class CryptoBot:
             fb.push_status, total, pnl_pct, pnl_usd, self._cycle,
             self.tracker.daily_trades(), self.tracker.win_rate(), crypto_config.MAX_OPEN_TRADES,
         )
-        fb.push_async(fb.push_positions, positions)
+        fb.push_async(fb.push_positions, positions, net_pnl)
         fb.push_async(fb.push_equity, total)
         fb.push_async(fb.push_accuracy, self.tracker.summary())
         if self._cycle_signals:
