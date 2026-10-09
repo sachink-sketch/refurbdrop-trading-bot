@@ -62,7 +62,7 @@ Respond ONLY with valid JSON:
 class ClaudeCryptoAnalyst:
     def __init__(self):
         self.client = anthropic.Anthropic(api_key=crypto_config.ANTHROPIC_API_KEY)
-        self.model = "claude-opus-5-5"
+        self.model = crypto_config.CLAUDE_MODEL
         self._trade_history: list[dict] = []
 
     @retry(

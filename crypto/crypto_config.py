@@ -7,6 +7,9 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "../.env"))
 class CryptoConfig:
     ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
 
+    # Claude model used for signals. Haiku is ~40x cheaper than Opus (about $1.40/day at a 2-min scan of 6 pairs).
+    CLAUDE_MODEL: str = os.getenv("CRYPTO_CLAUDE_MODEL", "claude-haiku-5-5")
+
     # Exchange: PAPER | ROBINHOOD | BINANCE | COINBASE | KRAKEN
     EXCHANGE: str = os.getenv("CRYPTO_EXCHANGE", "PAPER").upper()
 
