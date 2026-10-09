@@ -3,7 +3,7 @@ import json
 from dataclasses import dataclass
 from typing import Literal
 import anthropic
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_not_exception_type, stop_after_attempt, wait_exponential
 from crypto.crypto_config import crypto_config
 from utils.logger import logger
 
@@ -65,7 +65,12 @@ class ClaudeCryptoAnalyst:
         self.model = "claude-opus-5-5"
         self._trade_history: list[dict] = []
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=8))
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=8),
+        retry=retry_if_not_exception_type(anthropic.BadRequestError),  # 400s (e.g. no credits) never succeed on retry
+        reraise=True,
+    )
     def analyze(
         self,
         pair: str,
