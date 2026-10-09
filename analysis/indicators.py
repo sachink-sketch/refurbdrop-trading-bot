@@ -93,6 +93,10 @@ def summarize_indicators(df: pd.DataFrame) -> dict:
     prev_price = safe(prev["close"], price)
     change_pct = ((price - prev_price) / prev_price * 100) if prev_price else 0.0
 
+    ema_9  = safe(latest.get("ema_9"),  0)
+    ema_21 = safe(latest.get("ema_21"), 0)
+    ema_50 = safe(latest.get("ema_50"), 0)
+
     return {
         "price": round(price, 6),
         "change_pct": round(change_pct, 3),
@@ -100,16 +104,20 @@ def summarize_indicators(df: pd.DataFrame) -> dict:
         "macd": round(safe(latest.get("macd"), 0), 6),
         "macd_signal": round(safe(latest.get("macd_signal"), 0), 6),
         "macd_bullish": bool(latest.get("macd_bullish", False)),
-        "ema_9": round(safe(latest.get("ema_9"), 0), 6),
-        "ema_21": round(safe(latest.get("ema_21"), 0), 6),
-        "ema_50": round(safe(latest.get("ema_50"), 0), 6),
+        "ema_9": round(ema_9, 6),
+        "ema_21": round(ema_21, 6),
+        "ema_50": round(ema_50, 6),
+        # Whether price itself is above each EMA (more useful for scalping than EMA stacking)
+        "price_above_ema9":  price > ema_9  if ema_9  else False,
+        "price_above_ema21": price > ema_21 if ema_21 else False,
+        "price_above_ema50": price > ema_50 if ema_50 else False,
         "bb_pct": round(safe(latest.get("bb_pct"), 0.5), 4),
         "bb_width": round(safe(latest.get("bb_width"), 0), 4),
         "atr": round(safe(latest.get("atr"), 0), 6),
         "vol_ratio": round(safe(latest.get("vol_ratio"), 1), 3),
         "stoch_k": round(safe(latest.get("stoch_k"), 50), 2),
         "stoch_d": round(safe(latest.get("stoch_d"), 50), 2),
-        "trend_up": bool(latest.get("trend_up", False)),
+        "trend_up": bool(latest.get("trend_up", False)),    # strict EMA stack (ema9>ema21>ema50)
         "trend_down": bool(latest.get("trend_down", False)),
         "obv_rising": bool(safe(latest.get("obv"), 0) > safe(prev.get("obv"), 0)),
     }

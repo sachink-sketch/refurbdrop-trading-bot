@@ -40,12 +40,13 @@ class CryptoRiskManager:
             if daily_loss >= crypto_config.MAX_DAILY_LOSS_PCT:
                 return False, f"Daily loss limit hit: {daily_loss:.2%}"
 
-        # Max open trades
-        if signal.action == "BUY" and len(positions) >= crypto_config.MAX_OPEN_TRADES:
+        # Max open trades — only count positions worth ≥$5 (ignores dust/legacy holdings)
+        active_positions = {p: pos for p, pos in positions.items() if pos.value_usdt >= 5.0}
+        if signal.action == "BUY" and len(active_positions) >= crypto_config.MAX_OPEN_TRADES:
             return False, f"Max open trades reached ({crypto_config.MAX_OPEN_TRADES})"
 
-        # Don't double-buy same pair
-        if signal.action == "BUY" and signal.pair in positions:
+        # Don't double-buy same pair (ignore dust positions < $5)
+        if signal.action == "BUY" and signal.pair in active_positions:
             return False, f"Already holding {signal.pair}"
 
         # Can't sell what we don't have
