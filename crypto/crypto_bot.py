@@ -4,6 +4,7 @@ import json
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import anthropic
 from datetime import datetime, timedelta
 from crypto.exchanges.base_exchange import BaseCryptoExchange
 from crypto.claude_crypto import ClaudeCryptoAnalyst
@@ -21,6 +22,7 @@ _ENTRY_PRICES_FILE = os.path.join(os.path.dirname(__file__), "../logs/entry_pric
 _META_FILE = os.path.join(os.path.dirname(__file__), "../logs/position_meta.json")
 _SESSION_FILE = os.path.join(os.path.dirname(__file__), "../logs/daily_baseline.json")
 
+_LLM_RETRY_SECONDS = 3600
 _HTF_CACHE_SECONDS = 600
 _PARTIAL_AT_FRACTION_OF_TP = 0.5
 _MIN_PARTIAL_USD = 5.0
@@ -66,6 +68,7 @@ class CryptoBot:
         self._fg: dict = {"value": 50, "label": "Neutral"}
         self._htf_cache: dict[str, tuple[float, dict]] = {}
         self._quotes: dict[str, tuple[float, float]] = {}   # pair -> (bid, ask) from the latest scan
+        self._llm_down_until = 0.0   # Claude scan paused (credits exhausted) until this epoch time
         self._trailing = TrailingStopManager(
             trail_pct       = crypto_config.TRAIL_PCT,
             take_profit_pct = crypto_config.TAKE_PROFIT_PCT,
@@ -92,6 +95,9 @@ class CryptoBot:
         """Price we'd actually get selling now: the bid, falling back to the mark."""
         q = self._quotes.get(pair)
         return q[0] if q else pos.current_price
+
+    def _llm_paused(self) -> bool:
+        return time.time() < self._llm_down_until
 
     def _is_protected(self, pair: str) -> bool:
         """Long-term holdings the bot must never auto-sell (set "protected": true in position_meta.json)."""
@@ -139,7 +145,6 @@ class CryptoBot:
         logger.info(f"{'=' * 56}")
 
         self._fg = get_fear_greed()
-        fb.push_async(fb.push_market, self._fg)
 
         # 1. Fixed/ATR SL/TP check
         try:
@@ -196,14 +201,29 @@ class CryptoBot:
         usdt     = self.exchange.get_usdt_balance()
         positions = self._apply_entry_overrides(self.exchange.get_positions())
 
-        for pair in crypto_config.PAIRS:
-            if pair in crypto_config.EXCLUDED_PAIRS:
-                continue
-            try:
-                self._analyze_and_trade(pair, usdt, positions)
-                time.sleep(0.5)
-            except Exception as e:
-                logger.error(f"Error on {pair}: {e}", exc_info=False)
+        if self._llm_paused():
+            mins = int((self._llm_down_until - time.time()) / 60) + 1
+            logger.warning(f"Claude scan paused (API credits exhausted) — managing existing positions only; retry in ~{mins}m")
+            for pair in positions:
+                ba = self.exchange.get_bid_ask(pair)
+                if ba:
+                    self._quotes[pair] = ba
+        else:
+            for pair in crypto_config.PAIRS:
+                if pair in crypto_config.EXCLUDED_PAIRS:
+                    continue
+                try:
+                    self._analyze_and_trade(pair, usdt, positions)
+                    time.sleep(0.5)
+                except anthropic.BadRequestError as e:
+                    if "credit balance" in str(e).lower():
+                        self._llm_down_until = time.time() + _LLM_RETRY_SECONDS
+                        logger.warning("Claude API credits exhausted — pausing scan for 1h (stops/trailing keep running)")
+                        notify("Bot: Anthropic credits exhausted. Scanning paused; existing positions still managed.")
+                        break
+                    logger.error(f"Error on {pair}: {e}", exc_info=False)
+                except Exception as e:
+                    logger.error(f"Error on {pair}: {e}", exc_info=False)
 
         try:
             self._print_summary()
@@ -411,6 +431,7 @@ class CryptoBot:
         )
         fb.push_async(fb.push_positions, positions, net_pnl)
         fb.push_async(fb.push_equity, total)
+        fb.push_async(fb.push_market, self._fg, self._llm_paused())
         fb.push_async(fb.push_accuracy, self.tracker.summary())
         if self._cycle_signals:
             fb.push_async(fb.push_signals, self._cycle_signals)

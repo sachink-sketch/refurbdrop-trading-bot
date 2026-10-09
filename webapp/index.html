@@ -303,7 +303,7 @@ document.getElementById('sign-out-btn').addEventListener('click', () => {
 
 // ── DATA LISTENERS ──
 let unsubscribers = [];
-let maxTrades = 3, lastPosCount = 0;
+let maxTrades = 3, lastPosCount = 0, llmPaused = false;
 
 function startListening() {
   // Main status
@@ -373,13 +373,16 @@ function startListening() {
   function renderAnalysis() {
     const grid = document.getElementById('analysis-grid');
     const sigs = Object.values(_latestSigs);
+    const banner = llmPaused
+      ? '<div style="grid-column:1/-1;background:#2d1f0e;border:1px solid var(--yellow);color:var(--yellow);border-radius:8px;padding:10px 12px;font-size:12px">Claude analysis paused (API credits exhausted). Signals below are from the last scan. Open positions are still managed by stops.</div>'
+      : '';
     if (sigs.length === 0) {
-      grid.innerHTML = '<div style="color:var(--muted);text-align:center;padding:20px;font-size:13px;grid-column:1/-1">Waiting for next cycle...</div>';
+      grid.innerHTML = banner + '<div style="color:var(--muted);text-align:center;padding:20px;font-size:13px;grid-column:1/-1">Waiting for next cycle...</div>';
       return;
     }
     const tagMap = { BUY: 'tag-buy', SELL: 'tag-sell', HOLD: 'tag-hold' };
     const barClr = { BUY: 'var(--green)', SELL: 'var(--red)', HOLD: '#30363d' };
-    grid.innerHTML = sigs.map(s => {
+    grid.innerHTML = banner + sigs.map(s => {
       const action = s.action || 'HOLD';
       const conf   = s.confidence || 0;
       const pairKey = (s.pair || '').replace('/', '-');
@@ -496,6 +499,8 @@ function startListening() {
     const el = document.getElementById('c-fng');
     el.textContent = `${m.fng_value} · ${m.fng_label}`;
     el.className = 'val ' + (m.fng_value < 35 ? 'red' : m.fng_value > 65 ? 'green' : '');
+    llmPaused = !!m.llm_paused;
+    renderAnalysis();
   });
 
   // Signal accuracy by confidence bucket
