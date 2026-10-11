@@ -12,7 +12,7 @@ from crypto.crypto_risk import CryptoRiskManager
 from crypto.crypto_config import crypto_config
 from crypto.trailing_stop import TrailingStopManager
 from crypto.market_context import get_fear_greed
-from crypto.notifier import notify
+from crypto.notifier import notify, heartbeat
 from crypto.signal_tracker import SignalTracker
 from analysis.indicators import add_indicators, summarize_indicators
 from utils.logger import logger
@@ -513,6 +513,7 @@ class CryptoBot:
             self.tracker.daily_trades(), self.tracker.win_rate(), crypto_config.MAX_OPEN_TRADES,
         )
         fb.push_async(fb.push_positions, positions, net_pnl, costs)
+        heartbeat()
         fb.push_async(fb.push_equity, total)
         hold = ({"drop": crypto_config.GUARD_DROP_PCT, "peak_drop": crypto_config.GUARD_PEAK_DROP_PCT,
                  "peak_arm": crypto_config.GUARD_PEAK_ARM_PCT,

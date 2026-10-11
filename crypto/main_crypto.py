@@ -33,7 +33,25 @@ def banner(exchange_name: str):
     ))
 
 
+_LOCK_SOCKET = None
+
+
+def _single_instance_or_exit():
+    """Exit code 3 if another bot is already running (the launcher stops retrying on 3)."""
+    global _LOCK_SOCKET
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.bind(("127.0.0.1", 50581))
+    except OSError:
+        logger.warning("Another crypto bot instance is already running — exiting")
+        sys.exit(3)
+    _LOCK_SOCKET = s
+
+
 def run(demo: bool = False, live: bool = False, cycles: int = 0):
+    if not demo and cycles == 0:
+        _single_instance_or_exit()
     errors = crypto_config.validate()
     if errors:
         for e in errors:

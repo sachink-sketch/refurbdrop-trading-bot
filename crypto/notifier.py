@@ -18,6 +18,23 @@ def _send(text: str):
         pass
 
 
+_HEALTHCHECK_URL = os.getenv("HEALTHCHECK_URL", "")
+
+
+def heartbeat():
+    """Ping a dead-man's-switch URL (e.g. healthchecks.io); it emails you when pings stop arriving."""
+    if not _HEALTHCHECK_URL:
+        return
+
+    def _ping():
+        try:
+            requests.get(_HEALTHCHECK_URL, timeout=5)
+        except Exception:
+            pass
+
+    threading.Thread(target=_ping, daemon=True).start()
+
+
 def notify(text: str):
     if not (_TOKEN and _CHAT):
         return

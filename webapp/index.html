@@ -150,7 +150,7 @@
       <div class="ts" id="last-update">Connecting...</div>
     </div>
     <div class="user-info">
-      <span style="color:var(--green);font-size:12px">&#9679; LIVE</span>
+      <span id="live-badge" style="color:var(--muted);font-size:12px">&#9679; ...</span>
       <button class="sign-out" id="sign-out-btn">Log Out</button>
     </div>
   </header>
@@ -303,7 +303,19 @@ document.getElementById('sign-out-btn').addEventListener('click', () => {
 
 // ── DATA LISTENERS ──
 let unsubscribers = [];
-let maxTrades = 3, lastPosCount = 0, llmPaused = false, holdInfo = null;
+let maxTrades = 3, lastPosCount = 0, llmPaused = false, holdInfo = null, lastBotTs = null;
+
+function updateLiveBadge() {
+  const el = document.getElementById('live-badge');
+  if (!el) return;
+  if (!lastBotTs) { el.style.color = 'var(--muted)'; el.innerHTML = '&#9679; waiting'; return; }
+  const mins = Math.round((Date.now() / 1000 - lastBotTs) / 60);
+  if (mins <= 6) { el.style.color = 'var(--green)'; el.innerHTML = '&#9679; LIVE'; return; }
+  const ago = mins >= 120 ? Math.round(mins / 60) + ' h' : mins + ' min';
+  el.style.color = 'var(--red)';
+  el.innerHTML = `&#9679; BOT OFFLINE — no update for ${ago}`;
+}
+setInterval(updateLiveBadge, 30000);
 
 function startListening() {
   // Main status
@@ -311,6 +323,8 @@ function startListening() {
     const d = snap.val() || {};
     document.getElementById('last-update').textContent =
       d.last_updated ? 'Updated ' + d.last_updated : 'Waiting for bot data...';
+    lastBotTs = d.updated_ts || null;
+    updateLiveBadge();
     document.getElementById('c-total').textContent =
       d.portfolio_total != null ? '$' + d.portfolio_total.toFixed(2) : '--';
 

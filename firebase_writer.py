@@ -71,6 +71,7 @@ def push_status(
         "daily_trades":    daily_trades,
         "win_rate":        _safe(win_rate),
         "last_updated":    datetime.now().strftime("%H:%M:%S"),
+        "updated_ts":      datetime.now().timestamp(),
     })
 
 
