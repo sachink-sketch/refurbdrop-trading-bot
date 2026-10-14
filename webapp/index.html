@@ -228,6 +228,15 @@
   </div>
 
   <div class="section">
+    <div class="section-title"><span class="live-dot" style="background:var(--yellow)"></span> Paper Test — fake money, not your real coins <span id="pt-note" style="margin-left:auto;font-size:11px;color:var(--muted);font-weight:400"></span></div>
+    <table>
+      <thead><tr><th>Strategy</th><th>Value (start 100)</th><th>Return</th><th>Worst drop</th><th>Holding now</th><th>Last change</th></tr></thead>
+      <tbody id="pt-body"><tr class="empty-row"><td colspan="6">Waiting for the first daily result...</td></tr></tbody>
+    </table>
+    <div style="font-size:11px;color:var(--muted);margin-top:8px;line-height:1.5">Slow trend strategies tested forward in real time on public prices, paying the same 1.9% buy+sell cost as Robinhood. No real money is used. Results are tiny and noisy for the first weeks; judge after 4–8 weeks.</div>
+  </div>
+
+  <div class="section">
     <div class="section-title"><span class="live-dot" style="background:var(--purple)"></span> Claude's Analysis — Latest Cycle</div>
     <div class="analysis-grid" id="analysis-grid"><div style="color:var(--muted);text-align:center;padding:20px;font-size:13px;grid-column:1/-1">Waiting for next cycle...</div></div>
   </div>
@@ -550,6 +559,23 @@ function startListening() {
       const cls = v.avg_pnl >= 0 ? 'green' : 'red';
       return `<tr><td><strong>${k}</strong></td><td>${v.trades}</td><td>${wr}</td>
         <td class="${cls}">${v.trades ? (v.avg_pnl >= 0 ? '+' : '') + v.avg_pnl.toFixed(2) + '%' : '--'}</td></tr>`;
+    }).join('');
+  });
+
+  // Paper test of slow trend strategies (fake money)
+  onValue(ref(db, 'paper_trend'), snap => {
+    const p = snap.val();
+    if (!p || !p.strategies) return;
+    document.getElementById('pt-note').textContent = `started ${p.started} · data through ${p.through}`;
+    document.getElementById('pt-body').innerHTML = Object.values(p.strategies).map(s => {
+      const name = s.name;
+      const cls = s.ret_pct >= 0 ? 'green' : 'red';
+      const hold = Object.entries(s.holding || {}).map(([k, v]) => `${k} ${v}%`).join(', ');
+      return `<tr><td><strong>${name}</strong></td><td>${Number(s.value).toFixed(2)}</td>
+        <td class="${cls}">${s.ret_pct >= 0 ? '+' : ''}${Number(s.ret_pct).toFixed(2)}%</td>
+        <td>${Number(s.worst_drop_pct).toFixed(2)}%</td>
+        <td style="font-family:'Inter',sans-serif;font-size:12px">${hold}</td>
+        <td>${s.last_change || '--'}</td></tr>`;
     }).join('');
   });
 
