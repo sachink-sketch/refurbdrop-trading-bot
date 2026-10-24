@@ -144,6 +144,7 @@
 
 <!-- Dashboard -->
 <div id="dashboard">
+  <div id="alert-banner" style="display:none;background:#3a1417;border:1px solid var(--red);color:#ffb4ae;border-radius:8px;padding:12px 14px;margin:0 0 12px;font-size:13px;line-height:1.5"></div>
   <header>
     <div class="header-left">
       <h1><span class="live-dot"></span>REFURBDROP Trading Bot</h1>
@@ -534,6 +535,18 @@ function startListening() {
   }
   setInterval(tickStock, 1000);
   tickStock();
+
+  // Red alert bar (e.g. guard sells that Robinhood keeps rejecting)
+  onValue(ref(db, 'alert'), snap => {
+    const a = snap.val();
+    const el = document.getElementById('alert-banner');
+    if (a && a.text) {
+      el.textContent = `ATTENTION (${a.time}): ${a.text}`;
+      el.style.display = 'block';
+    } else {
+      el.style.display = 'none';
+    }
+  });
 
   // Fear & Greed
   onValue(ref(db, 'market'), snap => {

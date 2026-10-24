@@ -70,6 +70,7 @@ class CryptoBot:
         self._htf_cache: dict[str, tuple[float, dict]] = {}
         self._quotes: dict[str, tuple[float, float]] = {}   # pair -> (bid, ask) from the latest scan
         self._llm_down_until = 0.0   # Claude scan paused (credits exhausted) until this epoch time
+        self._sell_failures: dict[str, int] = {}
         self._last_research = 0.0
         self._research_updated = ""
         self._trailing = TrailingStopManager(
@@ -473,6 +474,8 @@ class CryptoBot:
             positions = self._apply_entry_overrides(self.exchange.get_positions())
             pos = positions.get(pair)
             order = self.exchange.sell_market(pair, qty)
+            if self._sell_failures.pop(pair, 0) >= 3:
+                fb.push_async(fb.push_alert, None)       # a sell finally went through: clear the site alert
             cost = self._cost_basis(pair, pos.avg_entry) if pos else 0
             self._entry_times.pop(pair, None)
             self._entry_prices.pop(pair, None)
@@ -495,6 +498,13 @@ class CryptoBot:
                 notify(f"{event_type} {pair} @ ${order.price:,.4f} ({pnl_pct:+.2%}, ${pnl_usd:+.2f})")
         except Exception as e:
             logger.error(f"SELL {pair} failed: {e}")
+            self._sell_failures[pair] = self._sell_failures.get(pair, 0) + 1
+            if self._sell_failures[pair] >= 3:
+                msg = (f"The guard wants to sell {pair} but Robinhood has rejected it {self._sell_failures[pair]} times in a row. "
+                       f"Consider selling it by hand in the Robinhood app. Reason: {str(e)[-160:]}")
+                fb.push_async(fb.push_alert, msg)
+                if self._sell_failures[pair] == 3:
+                    notify(msg)
 
     def _print_summary(self):
         usdt      = self.exchange.get_usdt_balance()

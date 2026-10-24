@@ -24,6 +24,39 @@ def _retry(fn, retries=3, delay=5):
                 raise
 
 
+LAST_REJECTION: dict = {}
+_OK_CODES = (200, 201, 202, 204, 301, 302, 303, 304, 307, 400, 401, 402, 403)
+
+
+def _install_rejection_logging():
+    """robin_stocks prints only 'Received 422' and drops Robinhood's explanation. Record and log the real reason.
+    Behavior is otherwise identical to the library's request_post (same return values)."""
+    import robin_stocks.robinhood.orders as orders_mod
+    if getattr(orders_mod, "_reason_patch", False):
+        return
+    original = orders_mod.request_post
+
+    def request_post(url, payload=None, timeout=16, json=False, jsonify_data=True):
+        res = original(url, payload=payload, timeout=timeout, json=json, jsonify_data=False)
+        if res is None:
+            return None
+        if res.status_code >= 400:
+            LAST_REJECTION.clear()
+            LAST_REJECTION.update(status=res.status_code, text=(res.text or "")[:300])
+            logger.warning(f"[ROBINHOOD] order request rejected HTTP {res.status_code}: {(res.text or '')[:300]}")
+        if not jsonify_data:
+            return res
+        if res.status_code not in _OK_CODES:
+            return None
+        try:
+            return res.json()
+        except Exception:
+            return None
+
+    orders_mod.request_post = request_post
+    orders_mod._reason_patch = True
+
+
 def _symbol(pair: str) -> str:
     """'BTC/USDT' → 'BTC'"""
     return pair.split("/")[0].upper()
@@ -39,6 +72,7 @@ class RobinhoodCryptoExchange(BaseCryptoExchange):
     def __init__(self):
         from config import config
         import robin_stocks.robinhood as rh
+        _install_rejection_logging()
         self._rh = rh
         kwargs = {"username": config.ROBINHOOD_USERNAME, "password": config.ROBINHOOD_PASSWORD, "store_session": True}
         if config.ROBINHOOD_MFA_CODE:
@@ -153,9 +187,10 @@ class RobinhoodCryptoExchange(BaseCryptoExchange):
         if sym not in self.SUPPORTED:
             raise ValueError(f"{sym} not supported on Robinhood")
         price = self.get_price(pair)
+        LAST_REJECTION.clear()
         order = self._rh.order_buy_crypto_by_price(sym, usdt_amount)
         if not order or order.get("detail"):
-            raise RuntimeError(f"Robinhood buy failed: {order}")
+            raise RuntimeError(f"Robinhood buy failed: {order} | Robinhood said: {LAST_REJECTION.get('text', 'no reason returned')}")
         ba = self.get_bid_ask(pair)
         filled_price = float(order.get("average_price") or 0) or self._fill_price(
             order.get("id", ""), ba[1] if ba else price
@@ -173,6 +208,7 @@ class RobinhoodCryptoExchange(BaseCryptoExchange):
     def sell_market(self, pair: str, qty: float) -> CryptoOrder:
         sym = _symbol(pair)
         price = self.get_price(pair)
+        LAST_REJECTION.clear()
         qty_rounded = round(qty, 6)
         order = self._rh.order_sell_crypto_by_quantity(sym, qty_rounded)
         if not order or order.get("detail"):
@@ -180,7 +216,7 @@ class RobinhoodCryptoExchange(BaseCryptoExchange):
             proceeds = round(qty_rounded * price, 2)
             order = self._rh.order_sell_crypto_by_price(sym, proceeds)
         if not order or order.get("detail"):
-            raise RuntimeError(f"Robinhood sell failed: {order}")
+            raise RuntimeError(f"Robinhood sell failed: {order} | Robinhood said: {LAST_REJECTION.get('text', 'no reason returned')}")
         ba = self.get_bid_ask(pair)
         filled_price = float(order.get("average_price") or 0) or self._fill_price(
             order.get("id", ""), ba[0] if ba else price

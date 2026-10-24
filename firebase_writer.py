@@ -139,6 +139,11 @@ def push_market(fear_greed: dict, llm_paused: bool = False, hold: Optional[dict]
     })
 
 
+def push_alert(text: Optional[str]):
+    """Show (or, with None, clear) a red alert banner on the site."""
+    _put("alert", {"text": text, "time": datetime.now().strftime("%m/%d %H:%M")} if text else None)
+
+
 def push_accuracy(summary: dict):
     _put("accuracy", summary)
 
