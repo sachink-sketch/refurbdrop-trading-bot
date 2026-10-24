@@ -21,6 +21,7 @@ import firebase_writer as fb
 _ENTRY_PRICES_FILE = os.path.join(os.path.dirname(__file__), "../logs/entry_prices.json")
 _META_FILE = os.path.join(os.path.dirname(__file__), "../logs/position_meta.json")
 _SESSION_FILE = os.path.join(os.path.dirname(__file__), "../logs/daily_baseline.json")
+_QUOTES_FILE = os.path.join(os.path.dirname(__file__), "../logs/quotes_log.csv")
 
 _LLM_RETRY_SECONDS = 3600
 _HTF_CACHE_SECONDS = 600
@@ -249,13 +250,27 @@ class CryptoBot:
         except Exception as e:
             logger.error(f"[BOT] Summary error: {e}")
 
+    def _log_quote(self, pair: str, ba: tuple[float, float], mark: float):
+        """Append Robinhood's real bid/ask/mark to a CSV so time-of-day spread and price studies have real data."""
+        try:
+            path = _QUOTES_FILE
+            new = not os.path.exists(path)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "a", encoding="utf-8") as f:
+                if new:
+                    f.write("utc,pair,bid,ask,mark\n")
+                f.write(f"{datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S')},{pair},{ba[0]},{ba[1]},{mark}\n")
+        except Exception:
+            pass
+
     def _hold_cycle(self):
         """Hold & guard: refresh quotes and sell only on a big drop (vs real cost, or off the peak after a gain)."""
         positions = self._apply_entry_overrides(self.exchange.get_positions())
-        for pair in positions:
+        for pair, pos in positions.items():
             ba = self.exchange.get_bid_ask(pair)
             if ba:
                 self._quotes[pair] = ba
+                self._log_quote(pair, ba, pos.current_price)
         for pair, pos in self._unprotected(positions).items():
             if pos.value_usdt < 5.0:
                 continue
